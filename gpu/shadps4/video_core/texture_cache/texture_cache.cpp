@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -31,6 +32,12 @@
 #include "video_core/texture_cache/texture_cache.h"
 #include <vulkan/vulkan_format_traits.hpp>
 #include "video_core/texture_cache/tile_manager.h"
+#include <vk_mem_alloc.h> // sanctuary: SANCTUARY_VRAM_REPORT=2 (after the Vulkan headers above)
+
+namespace Vulkan { // sanctuary: live pipelines (vk_graphics_pipeline.cpp, vk_compute_pipeline.cpp)
+extern std::atomic<int> sanctuary_live_graphics_pipelines;
+extern std::atomic<int> sanctuary_live_compute_pipelines;
+} // namespace Vulkan
 
 namespace VideoCore {
 
@@ -1901,6 +1908,38 @@ void TextureCache::GarbageCollectImages() {
                             (unsigned long long)(critical_gc_memory >> 20),
                             (unsigned long long)(buffer_cache.ResidentBytes() >> 20),
                             (unsigned long long)(buffer_cache.BdaPageTableBytes() >> 10));
+            }
+            // SANCTUARY_VRAM_REPORT=2: every 30 s, VMA's totals, what lies outside VMA, live
+            // pipelines, and VMA's per-allocation dump to $SANCTUARY_VRAM_DUMP.<n>.json.
+            static const bool detailed = std::string_view{std::getenv("SANCTUARY_VRAM_REPORT")} == "2";
+            if (detailed && now - vram_detail_time >= std::chrono::seconds(30)) {
+                vram_detail_time = now;
+                VmaTotalStatistics stats{};
+                vmaCalculateStatistics(instance.GetAllocator(), &stats);
+                const u64 vma_blocks = stats.total.statistics.blockBytes;
+                const u64 vma_used = stats.total.statistics.allocationBytes;
+                const u64 arenas = buffer_cache.ArenaAllocatedBytes();
+                const s64 outside = s64(usage) - s64(vma_blocks) - s64(arenas);
+                std::printf("VRAM detail: device usage %llu MiB = VMA %llu MiB in %u blocks (%llu MiB "
+                            "allocated in %u allocations) + arenas %llu MiB + outside both %lld MiB; "
+                            "pipelines %d graphics, %d compute\n",
+                            (unsigned long long)(usage >> 20), (unsigned long long)(vma_blocks >> 20),
+                            stats.total.statistics.blockCount, (unsigned long long)(vma_used >> 20),
+                            stats.total.statistics.allocationCount, (unsigned long long)(arenas >> 20),
+                            (long long)(outside / (1 << 20)),
+                            Vulkan::sanctuary_live_graphics_pipelines.load(),
+                            Vulkan::sanctuary_live_compute_pipelines.load());
+                if (const char* dump = std::getenv("SANCTUARY_VRAM_DUMP")) {
+                    static int dump_index = 0;
+                    char* json = nullptr;
+                    vmaBuildStatsString(instance.GetAllocator(), &json, VK_TRUE);
+                    const std::string path = fmt::format("{}.{}.json", dump, dump_index++);
+                    if (FILE* f = std::fopen(path.c_str(), "w")) {
+                        std::fputs(json, f);
+                        std::fclose(f);
+                    }
+                    vmaFreeStatsString(instance.GetAllocator(), json);
+                }
             }
         }
     }

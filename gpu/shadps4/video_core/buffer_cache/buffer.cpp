@@ -3,7 +3,9 @@
 
 #include <cstdlib>
 #include <numeric>
+#include <string>
 #include <string_view>
+#include <fmt/format.h>
 
 #include "common/alignment.h"
 #include "common/assert.h"
@@ -174,6 +176,12 @@ Buffer::Buffer(const Vulkan::Instance& instance, VAddr cpu_addr_, u64 size_bytes
     };
     VmaAllocationInfo alloc_info{};
     buffer.Create(buffer_ci, mem_type, &alloc_info);
+    if (buffer.allocation) {
+        // sanctuary: named for SANCTUARY_VRAM_REPORT=2's allocation dump.
+        const std::string name = fmt::format("buf {} {}", BufferTypeName(mem_type),
+                                             debug_name.empty() ? std::string_view{"-"} : debug_name);
+        vmaSetAllocationName(instance.GetAllocator(), buffer.allocation, name.c_str());
+    }
 
     const auto device = instance.GetDevice();
     if (!debug_name.empty()) {

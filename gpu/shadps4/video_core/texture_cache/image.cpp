@@ -3,6 +3,8 @@
 
 #include "sanctuary_toggles.h"
 #include <ranges>
+#include <string>
+#include <fmt/format.h>
 #include "common/assert.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -122,6 +124,12 @@ void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
                vk::to_string(vk::Result{result}));
     image = vk::Image{unsafe_image};
     size_bytes = alloc_info.size;
+    // sanctuary: named for SANCTUARY_VRAM_REPORT=2's allocation dump.
+    const std::string name =
+        fmt::format("img {}x{}x{} {} mips {} layers {}", image_ci.extent.width, image_ci.extent.height,
+                    image_ci.extent.depth, vk::to_string(image_ci.format), image_ci.mipLevels,
+                    image_ci.arrayLayers);
+    vmaSetAllocationName(allocator, allocation, name.c_str());
 }
 
 Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,

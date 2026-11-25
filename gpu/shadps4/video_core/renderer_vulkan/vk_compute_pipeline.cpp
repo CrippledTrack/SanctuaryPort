@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
 #include <boost/container/small_vector.hpp>
 
 #include "shader_recompiler/info.h"
@@ -11,6 +12,9 @@
 
 namespace Vulkan {
 
+// sanctuary: live pipelines, for SANCTUARY_VRAM_REPORT=2.
+std::atomic<int> sanctuary_live_compute_pipelines{0};
+
 ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
                                  DescriptorHeap& desc_heap, const Shader::Profile& profile,
                                  vk::PipelineCache pipeline_cache, ComputePipelineKey compute_key_,
@@ -18,6 +22,7 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
                                  SerializationSupport& sdata, bool preloading /*=false*/)
     : Pipeline{instance, scheduler, desc_heap, profile, pipeline_cache, true},
       compute_key{compute_key_} {
+    ++sanctuary_live_compute_pipelines;
     auto& info = stages[int(Shader::SwStage::Compute)];
     info = &info_;
     const auto debug_str = GetDebugString();
@@ -119,6 +124,8 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
     RecordWaveSizes();
 }
 
-ComputePipeline::~ComputePipeline() = default;
+ComputePipeline::~ComputePipeline() {
+    --sanctuary_live_compute_pipelines;
+}
 
 } // namespace Vulkan

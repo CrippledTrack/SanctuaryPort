@@ -43,8 +43,11 @@ class BufferCache {
     static constexpr u64 MAX_ARENA_PAGE_BITS = 32;
     static constexpr u64 MIN_ARENA_PAGE_BITS = 30;
 #ifdef SANCTUARY_MACOS
-    // macOS: dense arenas use 16 MiB pages (SANCTUARY_DENSE_ARENA_MB to change).
-    static constexpr u64 MIN_DENSE_ARENA_PAGE_BITS = 24;
+    // macOS: dense arenas use 4 MiB pages by default (SANCTUARY_DENSE_ARENA_MB picks 4 MiB or more).
+    // Menus with a hero loaded: 16 MiB pages allocated 800 MiB for 442 resident, 8 MiB 648 for 478,
+    // 4 MiB 540 for 440 (29 merges instead of 17).
+    static constexpr u64 DEFAULT_DENSE_ARENA_PAGE_BITS = 22;
+    static constexpr u64 MIN_DENSE_ARENA_PAGE_BITS = 22;
     static constexpr u64 MAX_ARENA_PAGES = u64{1} << (ADDRESS_SPACE_BITS - MIN_DENSE_ARENA_PAGE_BITS);
 #else
     static constexpr u64 MAX_ARENA_PAGES = u64{1} << (ADDRESS_SPACE_BITS - MIN_ARENA_PAGE_BITS);
@@ -89,6 +92,14 @@ public:
     }
     [[nodiscard]] u64 BdaPageTableBytes() const noexcept {
         return bda_pagetable_blocks * sizeof(vk::DeviceAddress);
+    }
+    /// sanctuary: device memory bound to buffer arenas (dense arenas on macOS; 0 elsewhere).
+    [[nodiscard]] u64 ArenaAllocatedBytes() const noexcept {
+#ifdef SANCTUARY_MACOS
+        return dense_arena_bytes;
+#else
+        return 0;
+#endif
     }
 
 #ifdef SANCTUARY_MACOS

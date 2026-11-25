@@ -460,6 +460,9 @@ void Presenter::RecreateFrame(Frame* frame, u32 width, u32 height) {
                      vk::to_string(vk::Result{result}));
         UNREACHABLE();
     }
+    if (frame->allocation) { // sanctuary: SANCTUARY_VRAM_REPORT=2
+        vmaSetAllocationName(instance.GetAllocator(), frame->allocation, "presenter frame");
+    }
     frame->image = vk::Image{unsafe_image};
     SetObjectName(device, frame->image, "Frame image #{}", frame->id);
 

@@ -44,6 +44,9 @@ static constexpr std::array LogicalStageToStageBit = {
     vk::ShaderStageFlagBits::eCompute,
 };
 
+// sanctuary: live pipelines, for SANCTUARY_VRAM_REPORT=2.
+std::atomic<int> sanctuary_live_graphics_pipelines{0};
+
 GraphicsPipeline::GraphicsPipeline(
     const Instance& instance, Scheduler& scheduler, DescriptorHeap& desc_heap,
     const Shader::Profile& profile, const GraphicsPipelineKey& key_,
@@ -53,6 +56,7 @@ GraphicsPipeline::GraphicsPipeline(
     std::span<const vk::ShaderModule> modules, SerializationSupport& sdata, bool preloading)
     : Pipeline{instance, scheduler, desc_heap, profile, pipeline_cache}, key{key_},
       fetch_shader{std::move(fetch_shader_)} {
+    ++sanctuary_live_graphics_pipelines;
     const auto started = Clock::now();
     const vk::Device device = instance.GetDevice();
     std::ranges::copy(infos, stages.begin());
@@ -490,7 +494,9 @@ GraphicsPipeline::GraphicsPipeline(
     ++g_sanctuary_pipelines_built;
 }
 
-GraphicsPipeline::~GraphicsPipeline() = default;
+GraphicsPipeline::~GraphicsPipeline() {
+    --sanctuary_live_graphics_pipelines;
+}
 
 template <typename Attribute, typename Binding>
 void GraphicsPipeline::GetVertexInputs(

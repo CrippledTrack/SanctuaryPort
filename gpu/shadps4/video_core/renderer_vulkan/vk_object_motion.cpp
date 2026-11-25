@@ -39,6 +39,7 @@ bool CreateBuffer(const Instance& instance, vk::DeviceSize size, bool host, vk::
         VK_SUCCESS) {
         return false;
     }
+    vmaSetAllocationName(instance.GetAllocator(), allocation, "object motion"); // sanctuary
     buffer = raw;
     if (mapped) {
         *mapped = info.pMappedData;

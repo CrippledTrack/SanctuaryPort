@@ -67,11 +67,11 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
     }
 #ifdef SANCTUARY_MACOS
     // macOS: a dense arena's memory is all committed once the GPU uses it (KosmicKrisp on
-    // Apple silicon), so dense arenas use 16 MiB pages instead of 2 GiB ones: in the menu that
-    // committed 336 MiB instead of 2048. Requests spanning pages merge arenas
-    // (MergeDenseArenas). SANCTUARY_DENSE_ARENA_MB picks another size.
+    // Apple silicon), so dense arenas use small pages (DEFAULT_DENSE_ARENA_PAGE_BITS) instead of
+    // 2 GiB ones. Requests spanning pages merge arenas (MergeDenseArenas).
+    // SANCTUARY_DENSE_ARENA_MB picks another size.
     if (instance.UsesDenseArenas()) {
-        u64 bits = MIN_DENSE_ARENA_PAGE_BITS;
+        u64 bits = DEFAULT_DENSE_ARENA_PAGE_BITS;
         if (const char* env = std::getenv("SANCTUARY_DENSE_ARENA_MB"); env && *env) {
             bits = std::bit_width(std::max<u64>(std::strtoull(env, nullptr, 10), 1)) - 1 + 20;
         }
@@ -671,7 +671,13 @@ const Buffer* BufferCache::MergeDenseArenas(u64 first_page, u64 last_page) {
         const vk::DeviceMemory memory = it->second;
         dense_arena_memory.erase(it);
         dense_arena_bytes -= old->SizeBytes();
-        scheduler.DeferOperation([device, memory, bytes = old->SizeBytes()] {
+        // The VkBuffer goes too: KosmicKrisp keeps the memory alive while a buffer bound to it
+        // exists (measured: freeing only the memory left every merged arena allocated, 832 MiB in
+        // the menus). The Buffer object stays in `arenas` with a null handle (pointers into the
+        // deque must stay valid); nothing uses a retired arena after this tick.
+        auto* retired = const_cast<Buffer*>(old);
+        scheduler.DeferOperation([device, memory, retired, bytes = old->SizeBytes()] {
+            retired->buffer.Destroy();
             device.freeMemory(memory);
             std::printf("GPU: freed a merged dense arena's %llu MiB\n", (unsigned long long)(bytes >> 20));
         });
@@ -692,7 +698,7 @@ const Buffer* BufferCache::MergeDenseArenas(u64 first_page, u64 last_page) {
 // Rasterizer::ResetBindings hands each written binding here once the draw is recorded. The old
 // memory is freed only after this tick's work completes, so the copy still reads it.
 void BufferCache::ResolveRetiredArenaWrite(const Buffer* buffer, u64 offset, u64 size) {
-    if (buffer->mem_type != MemoryType::DenseArena) {
+    if (buffer->mem_type != MemoryType::DenseArena || !buffer->Handle()) {
         return;
     }
     const VAddr addr = buffer->cpu_addr + offset;

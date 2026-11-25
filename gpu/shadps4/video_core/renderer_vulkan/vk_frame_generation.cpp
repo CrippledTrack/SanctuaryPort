@@ -155,6 +155,7 @@ void FrameGeneration::MakeFrame(Frame& frame, u32 width, u32 height, vk::Format 
         std::printf("Frame generation: image allocation failed, off\n");
         return;
     }
+    vmaSetAllocationName(instance.GetAllocator(), frame.allocation, "frame generation"); // sanctuary
     frame.image = vk::Image(image);
     frame.image_view = Check(device.createImageView({
         .image = frame.image,

@@ -53,7 +53,7 @@ Result (native run 4): window, swapchain and presenter, guest threads, a 2 GiB d
 
 Not done yet:
 - frame rate, rendering correctness, audio, gamepads and a long session;
-- the footprint inside the world (measured only in the intro and menus so far);
+- the in-world footprint (~7 GB, see "Memory footprint");
 - scripting and packaging the KosmicKrisp build and a `.app`;
 - `build.sh --test`'s unit tests on macOS;
 - `--gamepad` mode, which pumps SDL events off the main thread.
@@ -90,8 +90,38 @@ What changed:
 - `Runtime: flexible maps=...` now ends with `released=` (pool bytes released and zeroed on macOS).
   It is 0 in these runs, so `host_discard`'s memset costs nothing so far.
 
-Left: images (~230 MiB), other GPU buffers (stream, staging and download buffers, ~1 GB in all, not
-yet broken down), the guest pool (what the game touches), and the in-world numbers.
+In-world (10 minutes in Act 2, 2026-11-24): rendering correct, 69 arena merges, no stops, but the
+footprint settles at ~6.7 GB and ends at 7.2 GB:
+
+| | in-world |
+|---|---|
+| Guest memory pool | 2.3 GB |
+| Dense buffer arenas | 1296 MiB allocated for 746 MiB resident (16 MiB pages: ~1.7×) |
+| Images (texture cache) | ~475 MiB |
+| BDA page table | 48 MiB |
+| Other GPU allocations (not yet identified: 2×256 MiB, several 128–192 MiB, ~50×16 MiB) | ~1.9 GB |
+| Host malloc heap | ~310 MB |
+
+The ~1.9 GB, identified (2026-11-25, menus with a hero loaded, `SANCTUARY_VRAM_REPORT=2`):
+- **Merged dense arenas leaked.** A merge freed the old arenas' memory but kept their `VkBuffer`s (so
+  pointers stay valid), and KosmicKrisp keeps memory alive while a buffer bound to it exists. Every
+  merge kept its predecessors: 832 MiB in the menus, exactly the sum of the freed arenas. The deferred
+  free now destroys the `VkBuffer` first; memory outside VMA and the arenas fell from 1017 MiB to
+  185 MiB.
+- **The rest of the driver's memory is small:** 185 MiB for ~125 pipelines, command buffers and
+  the like.
+- **Arena pages are now 4 MiB.** With 16 MiB pages the arenas held 800 MiB for 442 MiB resident;
+  8 MiB: 648 for 478; 4 MiB: 540 for 440 (29 merges instead of 17).
+- VMA itself (~900 MiB): images ~330 MiB, staging rings 160 MiB (10 × 16 MiB), the stream buffer
+  128 MiB, other buffers ~90 MiB, the BDA table 48 MiB.
+
+`SANCTUARY_VRAM_REPORT=2` prints, every 30 s, device usage split into VMA (blocks and what is
+allocated in them), arenas and what lies outside both, and live pipelines;
+`SANCTUARY_VRAM_DUMP=<prefix>` also writes VMA's per-allocation JSON (allocations are named:
+`buf <type> <name>`, `img WxHxD <format>`, `presenter frame`, ...).
+
+Menu footprint with the same save data: ~5.5–5.9 GB before these two changes, ~4.7–5.0 GB after
+(GPU ~2.0 GB, guest memory ~2.0 GB, host heap ~0.25 GB). Not yet measured in-world.
 
 ## Baseline: Windows release under CrossOver (2026-11-24)
 
