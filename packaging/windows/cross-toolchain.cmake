@@ -28,6 +28,9 @@ set(CMAKE_CXX_COMPILER clang++)
 set(CMAKE_C_COMPILER_TARGET ${triple})
 set(CMAKE_CXX_COMPILER_TARGET ${triple})
 set(CMAKE_RC_COMPILER llvm-windres)
+# llvm-windres otherwise targets the host CPU: on an arm64 host (Apple silicon) the .res comes out
+# arm64 and lld refuses to link it into the x64 executable.
+set(CMAKE_RC_FLAGS_INIT "--target=x86_64-w64-mingw32")
 set(CMAKE_AR llvm-ar)
 set(CMAKE_RANLIB llvm-ranlib)
 set(CMAKE_SYSROOT "${sysroot}")

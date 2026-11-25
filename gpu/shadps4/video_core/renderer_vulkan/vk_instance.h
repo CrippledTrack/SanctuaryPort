@@ -20,6 +20,9 @@ VK_DEFINE_HANDLE(VmaAllocator)
 
 namespace Vulkan {
 
+/// MACOS-TEMP: true on a macOS host (now: the Windows build under Wine on macOS).
+bool SanctuaryMacosHost();
+
 class Instance {
 public:
     explicit Instance(bool validation = false, bool crash_diagnostic = false);
@@ -96,6 +99,11 @@ public:
 
     vk::Queue GetSparseQueue() const {
         return sparse_queue;
+    }
+
+    /// MACOS-TEMP: the driver has no sparse binding (macOS only); buffer arenas are dense.
+    bool UsesDenseArenas() const {
+        return dense_arenas;
     }
 
     vk::Queue GetPresentQueue() const {
@@ -570,6 +578,7 @@ private:
     vk::Queue present_queue;
     vk::Queue graphics_queue;
     vk::Queue sparse_queue;
+    bool dense_arenas{}; // MACOS-TEMP: see UsesDenseArenas
     std::vector<vk::PhysicalDevice> physical_devices;
     std::vector<std::string> available_extensions;
     std::unordered_map<vk::Format, vk::FormatProperties3> format_properties;

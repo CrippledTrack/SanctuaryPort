@@ -71,9 +71,12 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
         LOG_INFO(Render_Vulkan, "Buffer arenas of {} MiB (driver buffer limit {} MiB)",
                  arena_page_size >> 20, instance.GetMaxBufferSize() >> 20);
     }
+    // MACOS-TEMP: dense arenas (no sparse binding) take the plain buffer's requirements.
     const vk::BufferCreateInfo probe_ci = {
-        .flags =
-            vk::BufferCreateFlagBits::eSparseBinding | vk::BufferCreateFlagBits::eSparseResidency,
+        .flags = instance.UsesDenseArenas()
+                     ? vk::BufferCreateFlags{}
+                     : vk::BufferCreateFlagBits::eSparseBinding |
+                           vk::BufferCreateFlagBits::eSparseResidency,
         .size = arena_page_size,
         .usage = ARENA_USAGE,
         .sharingMode = vk::SharingMode::eExclusive,
@@ -474,13 +477,34 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
         if (!first_arena) {
             const u64 base_block = Common::AlignDownPow2<u64>(first_block, blocks_per_arena_page);
             const u64 num_pages = last_page - first_page + 1;
-            const auto* new_arena =
+            const bool dense = instance.UsesDenseArenas(); // MACOS-TEMP
+            auto* new_arena =
                 &arenas.emplace_back(instance, base_block << block_shift,
-                                     num_pages << arena_page_bits, MemoryType::Sparse);
+                                     num_pages << arena_page_bits,
+                                     dense ? MemoryType::DenseArena : MemoryType::Sparse);
+            if (dense) {
+                BindDenseArena(new_arena);
+            }
             address_space[first_page] = new_arena;
             address_space[last_page] = new_arena;
         }
         return address_space[first_page];
+    }
+
+    if (instance.UsesDenseArenas()) {
+        // MACOS-TEMP: merging arenas rebinds the same memory with sparse binding; dense arenas
+        // would need a content copy, new page-table entries and freeing the old arenas. Not done
+        // yet: stop loudly so a run shows whether the game ever needs it.
+        std::fprintf(stderr,
+                     "STOP: dense buffer arenas (macOS) cannot merge: request blocks %#llx-%#llx "
+                     "(addresses %#llx-%#llx) spans arena pages %llu and %llu (%s, %s)\n",
+                     (unsigned long long)first_block, (unsigned long long)last_block,
+                     (unsigned long long)(first_block << block_shift),
+                     (unsigned long long)((last_block + 1) << block_shift),
+                     (unsigned long long)first_page, (unsigned long long)last_page,
+                     first_arena ? "has an arena" : "empty", last_arena ? "has an arena" : "empty");
+        std::fflush(stderr);
+        std::exit(21);
     }
 
     LOG_WARNING(Render, "Migrating arena");
@@ -516,6 +540,30 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     return new_arena;
 }
 
+// MACOS-TEMP: a dense arena gets all its memory at once. Allocated directly rather than through
+// VMA: VMA's budget would count the whole arena, while the driver tested (KosmicKrisp on Apple
+// silicon) commits pages only when they are touched (a bound 4 GiB buffer added ~4 MiB).
+void BufferCache::BindDenseArena(Buffer* arena) {
+    const auto device = instance.GetDevice();
+    const vk::MemoryAllocateFlagsInfo flags_info = {
+        .flags = vk::MemoryAllocateFlagBits::eDeviceAddress,
+    };
+    const vk::MemoryAllocateInfo alloc_info = {
+        .pNext = &flags_info,
+        .allocationSize = arena->SizeBytes(),
+        .memoryTypeIndex = arena_memory_type_index,
+    };
+    const auto memory = Vulkan::Check(device.allocateMemory(alloc_info));
+    arena->BindDenseArenaMemory(device, memory);
+    dense_arena_bytes += arena->SizeBytes();
+    std::printf("GPU: dense buffer arena %#llx-%#llx (%llu MiB; %llu MiB in all)\n",
+                (unsigned long long)arena->cpu_addr,
+                (unsigned long long)(arena->cpu_addr + arena->SizeBytes()),
+                (unsigned long long)(arena->SizeBytes() >> 20),
+                (unsigned long long)(dense_arena_bytes >> 20));
+    std::fflush(stdout);
+}
+
 void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_block) {
     u32 resident_blocks{};
     IntervalList bind_ranges;
@@ -529,11 +577,15 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
     }
     SanctuaryStats::Timer timer{SanctuaryStats::t_resident};
 
+    // MACOS-TEMP: a dense arena's memory is already bound (BindDenseArena): no allocation and
+    // no sparse bind, only the page-table entries below.
+    const bool dense = instance.UsesDenseArenas();
     const vk::MemoryAllocateInfo alloc_info = {
         .allocationSize = resident_blocks << block_shift,
         .memoryTypeIndex = arena_memory_type_index,
     };
-    const auto device_memory = Vulkan::Check(instance.GetDevice().allocateMemory(alloc_info));
+    const auto device_memory =
+        dense ? vk::DeviceMemory{} : Vulkan::Check(instance.GetDevice().allocateMemory(alloc_info));
     resident_bytes += alloc_info.allocationSize;
     GrowBdaPageTable(last_block + 1);
 
@@ -542,7 +594,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
         staging_pool.Request(resident_blocks * sizeof(vk::DeviceAddress), MemoryType::HostUncached);
 
     u64 memory_offset{};
-    ArenaBinds* binds = BindsForArena(arena);
+    ArenaBinds* binds = dense ? nullptr : BindsForArena(arena); // MACOS-TEMP: none when dense
     auto* bda_addrs = reinterpret_cast<vk::DeviceAddress*>(staging.mapped);
     u64 offset = staging.offset;
     for (const auto& range : bind_ranges) {
@@ -555,12 +607,15 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
 
         LOG_INFO(Render, "Making range start={}, end={} resident", backing.start, backing.end);
 
-        const auto& bind = binds->binds.emplace_back(vk::SparseMemoryBind{
+        const vk::SparseMemoryBind bind{
             .resourceOffset = (range.start << block_shift) - arena->cpu_addr,
             .size = (range.end - range.start) << block_shift,
             .memory = device_memory,
             .memoryOffset = memory_offset,
-        });
+        };
+        if (binds) {
+            binds->binds.push_back(bind);
+        }
         memory_offset += bind.size;
 
         for (u32 block = 0; block < bind.size; block += block_size) {

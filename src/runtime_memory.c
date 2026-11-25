@@ -40,6 +40,13 @@ static uint64_t pool_size_bytes(void) {
 #define PAGE UINT64_C(16384)
 #define USER_MIN UINT64_C(0x1000000000)
 #define USER_MAX UINT64_C(0xfc00000000)
+/* MACOS-TEMP: swap to macOS-only (#ifdef __APPLE__) once native macOS builds exist.
+ * macOS keeps [0x0fc0000000, 0x7000000000) unmappable in every process (vmmap: "Guard", ---/---),
+ * so the user range there starts at 0x7000000000. While macOS is tested with the Windows build
+ * under Wine/CrossOver, runtime_memory_reserve picks it at run time when Wine reports a Darwin host;
+ * native Windows and Linux keep USER_MIN. docs/macos.md has the details. */
+#define MACOS_USER_MIN UINT64_C(0x7000000000)
+static uintptr_t user_min=USER_MIN; /* first guest address handed out from the user range */
 /* Host-owned memory the guest can see (image, stacks, trampolines) lives in
  * [LOW_MIN, USER_MIN): PS4 code packs pointers into 40-bit fields. */
 #define LOW_MIN UINT64_C(0x0800000000)
@@ -145,15 +152,35 @@ static void region_insert(size_t at, HostRegion r) {
 static void region_erase(size_t at, size_t n) {
     memmove(regions+at,regions+at+n,(region_count-at-n)*sizeof(*regions)); region_count-=n;
 }
+/* MACOS-TEMP: Wine's ntdll exports wine_get_host_version; sysname "Darwin" means a macOS host.
+ * Goes away when the macOS build sets user_min at compile time. */
+int runtime_wine_on_macos(void) {
+    static int known, darwin;
+    if (!known) {
+        typedef void (CDECL *HostVersion)(const char **sysname, const char **release);
+        HMODULE ntdll=GetModuleHandleA("ntdll.dll");
+        HostVersion host_version=ntdll ? (HostVersion)(void *)GetProcAddress(ntdll,"wine_get_host_version") : NULL;
+        const char *sysname=NULL, *release=NULL;
+        if (host_version) host_version(&sysname,&release);
+        darwin=sysname && !strcmp(sysname,"Darwin");
+        known=1;
+    }
+    return darwin;
+}
 /* The guest ranges are reserved before anything else can be placed there (runtime_start). */
 void runtime_memory_reserve(void) {
     if (region_count) return;
+    if (runtime_wine_on_macos()) { /* MACOS-TEMP */
+        user_min=MACOS_USER_MIN;
+        printf("Runtime: Wine on macOS, PS4 user range starts at %#" PRIx64 " (macOS guard below it)\n",(uint64_t)user_min);
+    }
     if (!VirtualAlloc2(NULL,(void *)SYSTEM_MIN,LOW_MIN-SYSTEM_MIN,MEM_RESERVE|MEM_RESERVE_PLACEHOLDER,PAGE_NOACCESS,NULL,0))
         win_fail("reserving the PS4 system-managed range",SYSTEM_MIN,LOW_MIN-SYSTEM_MIN);
-    if (!VirtualAlloc2(NULL,(void *)USER_MIN,USER_MAX-USER_MIN,MEM_RESERVE|MEM_RESERVE_PLACEHOLDER,PAGE_NOACCESS,NULL,0))
-        win_fail("reserving the PS4 address range (link with --disable-high-entropy-va)",USER_MIN,USER_MAX-USER_MIN);
+    /* MACOS-TEMP: user_min below was USER_MIN (here and in region_insert). */
+    if (!VirtualAlloc2(NULL,(void *)user_min,USER_MAX-user_min,MEM_RESERVE|MEM_RESERVE_PLACEHOLDER,PAGE_NOACCESS,NULL,0))
+        win_fail("reserving the PS4 address range (link with --disable-high-entropy-va)",user_min,USER_MAX-user_min);
     region_insert(0,(HostRegion){SYSTEM_MIN,LOW_MIN,0,0});
-    region_insert(1,(HostRegion){USER_MIN,USER_MAX,0,0});
+    region_insert(1,(HostRegion){user_min,USER_MAX,0,0});
 }
 static void view_map(const HostRegion *r, DWORD protect) {
     DWORD initial=protect==PAGE_NOACCESS ? PAGE_READWRITE : protect, old;
@@ -268,6 +295,7 @@ static int pool(void) {
     return 0;
 }
 void runtime_memory_reserve(void) {}
+int runtime_wine_on_macos(void) { return 0; } /* MACOS-TEMP: the GPU library calls it everywhere */
 static int host_map(uintptr_t address, uint64_t size, int prot, int reserved, uint64_t phys) {
     void *mapped = !reserved
         ? mmap((void *)address,size,prot,MAP_SHARED|MAP_FIXED,pool_fd,(off_t)phys)
@@ -368,7 +396,7 @@ static int overlaps(uintptr_t start, uintptr_t end, int ignore_reserved) {
 }
 /* First-fit search in the PS4 user range, starting from the hint. */
 static uintptr_t find_free(uintptr_t hint, uint64_t size, uint64_t alignment) {
-    uintptr_t at=align_up(hint<USER_MIN ? USER_MIN : hint, alignment);
+    uintptr_t at=align_up(hint<user_min ? user_min : hint, alignment); /* MACOS-TEMP: was USER_MIN */
     for (size_t i=vma_index(at); at+size<=USER_MAX; ++i) {
         if (i==vma_count || vmas[i].start>=at+size) return at;
         at=align_up(vmas[i].end,alignment);

@@ -142,6 +142,9 @@ private:
 
     void EnsureResident(const Buffer* arena, u64 first_block, u64 last_block);
 
+    /// MACOS-TEMP: allocates and binds all of a dense arena's memory (no sparse binding).
+    void BindDenseArena(Buffer* arena);
+
     /// sanctuary: grows the BDA page table so that it covers blocks below `end_block`.
     void GrowBdaPageTable(u64 end_block);
 
@@ -207,6 +210,7 @@ private:
     IntervalList<Backing> resident_ranges;
 
     u64 resident_bytes{};
+    u64 dense_arena_bytes{}; // MACOS-TEMP: memory bound to dense arenas
     u32 arena_memory_type_index{};
     u32 block_size{};
     u32 block_shift{};
