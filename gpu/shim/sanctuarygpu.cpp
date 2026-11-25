@@ -1,4 +1,4 @@
-#ifdef __APPLE__
+#ifdef SANCTUARY_MACOS
 #include <dispatch/dispatch.h>
 #endif
 #include <functional>
@@ -254,7 +254,7 @@ extern "C" int sanctuarygpu_init(const SanctuaryGpuConfig* config) {
         std::fflush(stdout);
         std::_Exit(0);
     };
-#ifdef __APPLE__
+#ifdef SANCTUARY_MACOS
     // macOS: AppKit windows live on the main thread, whose run loop drains the GCD main queue
     // (src/probe.c main); the loop then never gives the queue back.
     dispatch_async_f(dispatch_get_main_queue(), new std::function<void()>(std::move(window_loop)),

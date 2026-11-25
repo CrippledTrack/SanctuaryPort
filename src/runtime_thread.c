@@ -17,7 +17,7 @@
 #include <unistd.h>
 #ifdef _WIN32
 #include <windows.h>
-#elif defined(__APPLE__)
+#elif defined(SANCTUARY_MACOS)
 #include <sys/mman.h>
 #else
 #include <sys/syscall.h>
@@ -72,34 +72,19 @@ static uint64_t tls_offset(void) { return (tls_memsz+tls_align-1)&~(tls_align-1)
 #ifdef _WIN32
 /* TEB TlsSlots[64] start at gs:0x1480; slots 64+ live elsewhere and cannot be used. */
 static DWORD tls_slot=TLS_OUT_OF_INDEXES;
-/* MACOS-TEMP: CrossOver/Wine on macOS marks all 64 TlsSlots in use before main, yet leaves them
- * empty. There the TCB borrows slot 63, written straight into the TEB (TlsSetValue is for slots
- * the process owns). Tested in docs/macos.md: gs: reaches the TEB and slot 63 keeps its value.
- * Risk: if the macOS side ever writes that slot, the guest TCB is lost. Revisit for native macOS. */
-#define MACOS_TCB_SLOT 63
-static int borrowed_slot;
 uint32_t runtime_thread_tcb_offset(void) {
     if (tls_slot==TLS_OUT_OF_INDEXES) {
         tls_slot=TlsAlloc();
-        if (tls_slot>=64 && runtime_wine_on_macos()) { /* MACOS-TEMP */
-            if (tls_slot!=TLS_OUT_OF_INDEXES) TlsFree(tls_slot);
-            tls_slot=MACOS_TCB_SLOT; borrowed_slot=1;
-            printf("Runtime: Wine on macOS, no free TEB TLS slot; guest TCB borrows slot %d\n",MACOS_TCB_SLOT);
-        }
         if (tls_slot>=64) { fprintf(stderr,"STOP: no TEB TLS slot below 64 (got %lu)\n",tls_slot); exit(21); }
     }
     return 0x1480+8*(uint32_t)tls_slot;
 }
 static void set_gs(void *base) {
     runtime_thread_tcb_offset();
-    if (borrowed_slot) { /* MACOS-TEMP */
-        ((void **)((char *)NtCurrentTeb()+0x1480))[tls_slot]=base;
-        return;
-    }
     if (!TlsSetValue(tls_slot,base)) { fprintf(stderr,"STOP: TlsSetValue failed (%lu)\n",GetLastError()); exit(21); }
 }
 #define tls_block_alloc(size) _aligned_malloc(size,64)
-#elif defined(__APPLE__)
+#elif defined(SANCTUARY_MACOS)
 /* macOS x86_64 points gs at the thread's pthread data (TSD), where key k sits at gs:[8*k], and
  * no process may move gs. The guest TCB lives in a pthread key, and the loader rewrites the
  * guest's `mov rax, gs:[0]` to that slot (patch_tcb_loads), as on Windows. */
@@ -300,7 +285,7 @@ static ABI int32_t attr_set_guard(ThreadAttr **slot,uint64_t size) {
 static void set_host_name(const char *name) {
     char host[16]={0};
     memcpy(host,name,strnlen(name,sizeof(host)-1));
-#ifdef __APPLE__
+#ifdef SANCTUARY_MACOS
     pthread_setname_np(host); /* macOS names only the calling thread */
 #else
     pthread_setname_np(pthread_self(),host);

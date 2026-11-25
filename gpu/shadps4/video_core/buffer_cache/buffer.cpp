@@ -28,8 +28,10 @@ std::string_view BufferTypeName(MemoryType type) {
         return "DeviceLocal";
     case MemoryType::Sparse:
         return "Sparse";
-    case MemoryType::DenseArena: // MACOS-TEMP
+#ifdef SANCTUARY_MACOS
+    case MemoryType::DenseArena:
         return "DenseArena";
+#endif
     default:
         return "Invalid";
     }
@@ -116,12 +118,14 @@ void UniqueBuffer::Destroy() {
 void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
                           VmaAllocationInfo* out_alloc_info) {
     const bool with_bda = bool(buffer_ci.usage & vk::BufferUsageFlagBits::eShaderDeviceAddress);
+#ifdef SANCTUARY_MACOS
     if (mem_type == MemoryType::DenseArena) {
-        // MACOS-TEMP: no memory yet; BufferCache allocates it and calls BindDenseArenaMemory,
-        // which also reads the device address (not allowed before memory is bound).
+        // No memory yet; BufferCache allocates it and calls BindDenseArenaMemory, which also
+        // reads the device address (not allowed before memory is bound).
         buffer = Vulkan::Check(device.createBuffer(buffer_ci));
         return;
     }
+#endif
     if (mem_type != MemoryType::Sparse) {
         const VmaAllocationCreateFlags bda_flag =
             with_bda ? VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT : 0;
@@ -178,7 +182,12 @@ Buffer::Buffer(const Vulkan::Instance& instance, VAddr cpu_addr_, u64 size_bytes
         Vulkan::SetObjectName(device, Handle(), "Buffer {:#x}:{:#x}", cpu_addr, size_bytes);
     }
 
-    if (mem_type != MemoryType::Sparse && mem_type != MemoryType::DenseArena) { // MACOS-TEMP
+#ifdef SANCTUARY_MACOS
+    const bool unbacked = mem_type == MemoryType::Sparse || mem_type == MemoryType::DenseArena;
+#else
+    const bool unbacked = mem_type == MemoryType::Sparse;
+#endif
+    if (!unbacked) {
         VkMemoryPropertyFlags property_flags{};
         vmaGetAllocationMemoryProperties(instance.GetAllocator(), buffer.allocation,
                                          &property_flags);
@@ -189,13 +198,15 @@ Buffer::Buffer(const Vulkan::Instance& instance, VAddr cpu_addr_, u64 size_bytes
     }
 }
 
-void Buffer::BindDenseArenaMemory(vk::Device device, vk::DeviceMemory memory) { // MACOS-TEMP
+#ifdef SANCTUARY_MACOS
+void Buffer::BindDenseArenaMemory(vk::Device device, vk::DeviceMemory memory) {
     ASSERT(mem_type == MemoryType::DenseArena);
     device.bindBufferMemory(buffer.buffer, memory, 0);
     const vk::BufferDeviceAddressInfo bda_info = {.buffer = buffer.buffer};
     buffer.bda_addr = device.getBufferAddress(bda_info);
     ASSERT_MSG(buffer.bda_addr != 0, "Failed to get dense arena device address");
 }
+#endif
 
 void Buffer::Flush(u64 offset, u64 size) {
     if (mapped_data.empty() || is_coherent) {

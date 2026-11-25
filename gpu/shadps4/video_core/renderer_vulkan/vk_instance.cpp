@@ -22,16 +22,7 @@
 
 #include <vk_mem_alloc.h>
 
-// src/runtime_memory.c: 1 in the native macOS build, the Wine check in the Windows build
-// (MACOS-TEMP: the Windows build under Wine/CrossOver on macOS), 0 on Linux.
-extern "C" int runtime_macos_host(void);
-
 namespace Vulkan {
-
-bool SanctuaryMacosHost() {
-    static const bool macos = runtime_macos_host() != 0;
-    return macos;
-}
 
 namespace {
 
@@ -517,12 +508,14 @@ bool Instance::CreateDevice() {
             });
         if (sparse_family != family_properties.end()) {
             sparse_queue_family_index = static_cast<u32>(sparse_family - family_properties.begin());
-        } else if (SanctuaryMacosHost() && !features.sparseResidencyBuffer) {
-            // MACOS-TEMP: no Vulkan driver on Metal (MoltenVK, KosmicKrisp) has sparse binding.
+#ifdef SANCTUARY_MACOS
+        } else if (!features.sparseResidencyBuffer) {
+            // macOS: no Vulkan driver on Metal (MoltenVK, KosmicKrisp) has sparse binding.
             // The buffer cache then backs each arena with ordinary memory (dense arenas, see
             // BufferCache); the "sparse" queue is the graphics queue and is never used.
             dense_arenas = true;
             std::printf("GPU: no sparse binding (macOS); buffer arenas use dense memory\n");
+#endif
         } else {
             LOG_CRITICAL(Render_Vulkan, "The GPU has no queue with sparse binding (required).");
             return false;

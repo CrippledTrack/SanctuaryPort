@@ -42,10 +42,27 @@ class BufferCache {
     // Windows driver: 2 GiB); an arena spans up to two pages, so they shrink to half the limit.
     static constexpr u64 MAX_ARENA_PAGE_BITS = 32;
     static constexpr u64 MIN_ARENA_PAGE_BITS = 30;
+#ifdef SANCTUARY_MACOS
+    // macOS: dense arenas use 16 MiB pages (SANCTUARY_DENSE_ARENA_MB to change).
+    static constexpr u64 MIN_DENSE_ARENA_PAGE_BITS = 24;
+    static constexpr u64 MAX_ARENA_PAGES = u64{1} << (ADDRESS_SPACE_BITS - MIN_DENSE_ARENA_PAGE_BITS);
+#else
     static constexpr u64 MAX_ARENA_PAGES = u64{1} << (ADDRESS_SPACE_BITS - MIN_ARENA_PAGE_BITS);
+#endif
     static constexpr u64 MIN_BLOCK_SIZE = 16_KB;
 
 public:
+#ifdef SANCTUARY_MACOS
+    // macOS: the guard [0x0fc0000000, 0x7000000000) is in every process and the PS4
+    // user range starts above it (src/runtime_memory.c). Indexed from 0, the BDA page table spent
+    // 225+ MiB on it; its entries are left out (BdaIndex).
+    static constexpr u64 BDA_GAP_START = 0x0fc0000000ULL;
+    static constexpr u64 BDA_GAP_END = 0x7000000000ULL;
+#else
+    static constexpr u64 BDA_GAP_START = 0;
+    static constexpr u64 BDA_GAP_END = 0;
+#endif
+
     /// Read-only bindings up to this size are copied into a stream buffer (sanctuary: public for
     /// the draw pipeline's constant ring).
     static constexpr u64 STREAM_THRESHOLD = 16_KB;
@@ -73,6 +90,12 @@ public:
     [[nodiscard]] u64 BdaPageTableBytes() const noexcept {
         return bda_pagetable_blocks * sizeof(vk::DeviceAddress);
     }
+
+#ifdef SANCTUARY_MACOS
+    /// macOS: a draw's written binding whose dense arena was merged away while the draw bound
+    /// its other buffers wrote to the retired arena; copies that range into the current one.
+    void ResolveRetiredArenaWrite(const Buffer* buffer, u64 offset, u64 size);
+#endif
 
     /// Retrieves the fault buffer.
     [[nodiscard]] Buffer* GetFaultBuffer() noexcept {
@@ -142,11 +165,22 @@ private:
 
     void EnsureResident(const Buffer* arena, u64 first_block, u64 last_block);
 
-    /// MACOS-TEMP: allocates and binds all of a dense arena's memory (no sparse binding).
+#ifdef SANCTUARY_MACOS
+    /// macOS: allocates and binds all of a dense arena's memory (no sparse binding).
     void BindDenseArena(Buffer* arena);
 
+    /// macOS: one dense arena over arena pages [first_page, last_page] and every arena that
+    /// covers one of them; their resident contents are copied over on the GPU.
+    const Buffer* MergeDenseArenas(u64 first_page, u64 last_page);
+#endif
+
     /// sanctuary: grows the BDA page table so that it covers blocks below `end_block`.
-    void GrowBdaPageTable(u64 end_block);
+    void GrowBdaPageTable(u64 end_entry);
+
+    /// BDA page table entry of a guest block (blocks in the never-mapped gap have none).
+    [[nodiscard]] u64 BdaIndex(u64 block) const noexcept {
+        return block >= bda_gap_end_block ? block - bda_gap_blocks : block;
+    }
 
     void DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size);
 
@@ -188,6 +222,9 @@ private:
     // read past its end as zero, which is a fault, as for a block that is not resident).
     u64 bda_pagetable_blocks{};
     u64 bda_pagetable_max_blocks{};
+    u64 bda_pagetable_max_entries{};
+    u64 bda_gap_end_block{~0ULL};
+    u64 bda_gap_blocks{};
 
     std::array<const Buffer*, MAX_ARENA_PAGES> address_space{};
     u64 arena_page_bits{MAX_ARENA_PAGE_BITS};
@@ -210,7 +247,10 @@ private:
     IntervalList<Backing> resident_ranges;
 
     u64 resident_bytes{};
-    u64 dense_arena_bytes{}; // MACOS-TEMP: memory bound to dense arenas
+#ifdef SANCTUARY_MACOS
+    u64 dense_arena_bytes{}; // memory bound to dense arenas
+    std::vector<std::pair<const Buffer*, vk::DeviceMemory>> dense_arena_memory;
+#endif
     u32 arena_memory_type_index{};
     u32 block_size{};
     u32 block_shift{};

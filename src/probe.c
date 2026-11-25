@@ -20,7 +20,7 @@
 #include <tlhelp32.h>
 #else
 #include <sys/mman.h>
-#ifndef __APPLE__
+#ifndef SANCTUARY_MACOS
 #include <malloc.h>
 #endif
 #include <unistd.h>
@@ -30,7 +30,7 @@
 #include <dlfcn.h>
 #include <execinfo.h>
 #include <sys/uio.h>
-#ifdef __APPLE__
+#ifdef SANCTUARY_MACOS
 #include <pthread.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include <mach/mach.h>
@@ -114,7 +114,7 @@ static ABI __attribute__((noreturn)) void unresolved(uint32_t id, uintptr_t argu
 #ifndef _WIN32
 /* enter_on_stack(entry, arg0, arg1, stack_top): call entry(arg0,arg1) on a new stack. */
 void enter_on_stack(void *entry, void *arg0, void *arg1, void *top);
-#ifdef __APPLE__
+#ifdef SANCTUARY_MACOS
 #define ASM_SYMBOL(name) "_" #name /* Mach-O: C symbols carry a leading underscore */
 #else
 #define ASM_SYMBOL(name) #name
@@ -359,7 +359,7 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
 }
 static LONG WINAPI unhandled_fault(EXCEPTION_POINTERS *info) { return fatal_exception(info); }
 #endif
-#if defined(_WIN32) || defined(__APPLE__)
+#if defined(_WIN32) || defined(SANCTUARY_MACOS)
 /* Guest code reads its TCB with `mov rax, gs:[0]` (link_*.py rewrote fs:[0]); on Windows
  * the displacement becomes the TEB TLS slot that holds the guest TCB, on macOS the pthread key
  * slot (gs:[8*key]) that does (runtime_thread.c). */
@@ -552,7 +552,7 @@ static void fault(int sig, siginfo_t *info, void *context) {
     /* SANCTUARY_FAULT_WAIT=1 (development): keep the process stopped so a debugger can attach. */
     { const char *w = getenv("SANCTUARY_FAULT_WAIT");
       if (w && w[0] == '1') {
-#ifndef __APPLE__ /* Yama ptrace scope: Linux only */
+#ifndef SANCTUARY_MACOS /* Yama ptrace scope: Linux only */
           prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
 #endif
           snprintf(line, sizeof(line), "Fault wait: attach with gdb -p %d\n", (int)getpid());
@@ -596,7 +596,7 @@ static void dump_frames(ucontext_t *uc) {
         { ssize_t written_=write(2,line,sizeof(line)-1); (void)written_; }
         uintptr_t frame[2];
         struct iovec local={frame,sizeof(frame)}, remote={(void *)rbp,sizeof(frame)};
-#ifdef __APPLE__ /* reads that fail instead of faulting: vm_read_overwrite */
+#ifdef SANCTUARY_MACOS /* reads that fail instead of faulting: vm_read_overwrite */
         (void)local; (void)remote;
         mach_vm_size_t got=0;
         if (!rbp || mach_vm_read_overwrite(mach_task_self(),(mach_vm_address_t)rbp,sizeof(frame),(mach_vm_address_t)frame,&got)!=KERN_SUCCESS || got!=sizeof(frame)) break;
@@ -613,7 +613,7 @@ static void watchdog(int sig, siginfo_t *info, void *context) {
     const char head[]="STOP: watchdog timeout; thread stacks:\n";
     { ssize_t written_=write(2,head,sizeof(head)-1); (void)written_; }
     dump_frames(context);
-#ifndef __APPLE__ /* macOS: only the watchdog thread's stack (no /proc to list the others) */
+#ifndef SANCTUARY_MACOS /* macOS: only the watchdog thread's stack (no /proc to list the others) */
     int dir=open("/proc/self/task",O_RDONLY|O_DIRECTORY);
     char buffer[4096];
     long n;
@@ -719,7 +719,7 @@ void runtime_restart(void) {
     TerminateProcess(GetCurrentProcess(),0);
 #else
     const char *command = getenv("SANCTUARY_RESTART_COMMAND");
-#ifdef __APPLE__
+#ifdef SANCTUARY_MACOS
     for (int fd = 3, max = getdtablesize(); fd < max; ++fd) close(fd);
 #else
     syscall(SYS_close_range, 3u, ~0u, 0u);
@@ -753,7 +753,7 @@ static int cpu_supported(char *missing, size_t size) {
     return 1;
 }
 
-#ifdef __APPLE__
+#ifdef SANCTUARY_MACOS
 /* macOS: AppKit windows and their events belong to the process's main thread. The main thread
  * only runs its run loop, which drains the GCD main queue where the GPU library sends the window
  * loop (gpu/shim/sanctuarygpu.cpp); the loader and the game run on a thread of their own, with
@@ -783,7 +783,7 @@ int main(int argc, char **argv) {
     /* SANCTUARY_DEBUGGABLE=1 (development): any process of this user may read this one's memory
      * (tools that inspect the game's data while it runs). */
     { const char *d = getenv("SANCTUARY_DEBUGGABLE");
-#ifndef __APPLE__
+#ifndef SANCTUARY_MACOS
       if (d && d[0] == '1') prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
 #else
       (void)d;
@@ -791,7 +791,7 @@ int main(int argc, char **argv) {
     }
 #endif
     setvbuf(stdout, NULL, _IONBF, 0);
-#if !defined(_WIN32) && !defined(__APPLE__) /* macOS: TODO, see docs/macos.md (native build) */
+#if !defined(_WIN32) && !defined(SANCTUARY_MACOS) /* macOS: TODO, see docs/macos.md (native build) */
     /* Keep host heap objects handed to the guest (thread handles, TLS) in the
        non-PIE brk heap, i.e. below 1 TiB: the guest packs pointers into 40 bits. */
     mallopt(M_ARENA_MAX,1);
@@ -810,7 +810,7 @@ int main(int argc, char **argv) {
         runtime_pad_describe();
         return 0;
     }
-#if defined(_WIN32) || defined(__APPLE__)
+#if defined(_WIN32) || defined(SANCTUARY_MACOS)
     /* The PS4 user range must stay free of host allocations (GPU driver, heaps), and the guest
      * TCB needs one of the 64 TEB TLS slots before DLLs (Vulkan drivers) take them (macOS: a
      * pthread key, read the same way through gs). */
@@ -1085,7 +1085,7 @@ int main(int argc, char **argv) {
         _exit(missing ? 1 : 0); /* no destructors: GPU threads are running */
     }
     if (patch_file) apply_patches(patch_file, segments, ns, relocs, nr);
-#ifdef __APPLE__
+#ifdef SANCTUARY_MACOS
     printf("Guest TCB loads redirected to the pthread key slot: %" PRIu64 "\n", patch_tcb_loads(segments, ns));
 #endif
 #ifdef _WIN32
@@ -1161,7 +1161,7 @@ int main(int argc, char **argv) {
     enter_on_stack(image+entry,&params,(void *)guest_exit,stack+MAIN_STACK-64);
 #endif
     fail("entry unexpectedly returned");
-#ifdef __APPLE__
+#ifdef SANCTUARY_MACOS
     return 1; /* probe_main is not main: no implicit return (fail exits) */
 #endif
 }

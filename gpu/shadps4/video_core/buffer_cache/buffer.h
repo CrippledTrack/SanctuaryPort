@@ -33,7 +33,9 @@ enum class MemoryType : u8 {
     HostCached,   ///< Requires a host visible memory type optimized for GPU to CPU readbacks
     Stream,       ///< Requests device local host visible buffer, falling back host memory.
     Sparse,       ///< Requires an unbacked sparse resident buffer.
-    DenseArena,   ///< MACOS-TEMP: plain buffer, memory bound by the buffer cache (no sparse).
+#ifdef SANCTUARY_MACOS
+    DenseArena, ///< macOS: plain buffer, memory bound by the buffer cache (no sparse binding).
+#endif
 };
 
 constexpr vk::BufferUsageFlags ReadFlags =
@@ -116,8 +118,10 @@ struct Buffer {
         return buffer.bda_addr;
     }
 
-    /// MACOS-TEMP: binds a DenseArena buffer to its memory and reads its device address.
+#ifdef SANCTUARY_MACOS
+    /// macOS: binds a DenseArena buffer to its memory and reads its device address.
     void BindDenseArenaMemory(vk::Device device, vk::DeviceMemory memory);
+#endif
 
     /// Makes host writes in provided range visible to the device.
     void Flush(u64 offset, u64 size);

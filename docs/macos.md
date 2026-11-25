@@ -1,8 +1,8 @@
 # macOS
 
 Status: **the game runs natively** (no Wine) as an x86_64 macOS build under Rosetta 2, with an x86_64
-build of KosmicKrisp (Mesa's Vulkan driver on Metal 4). It also runs as the Windows build under
-CrossOver (run 6 below). Performance, rendering correctness and long sessions have not been measured
+build of KosmicKrisp (Mesa's Vulkan driver on Metal 4). The Windows build under CrossOver also ran
+(run 6 below), but that route is no longer supported: its Wine-specific code was removed. Performance, rendering correctness and long sessions have not been measured
 yet. The native build is described first. The rest of the file is the history: the baseline (the
 unmodified Windows release under CrossOver) and each blocker found on the way.
 
@@ -19,9 +19,10 @@ SANCTUARY_GAME_DIR=~/d3/CUSA00242-app SANCTUARY_PATCH_DIR=~/d3/CUSA00242-patch \
 Needs Homebrew `cmake ninja pkg-config glslang boost robin-map vulkan-headers` and the x86_64
 KosmicKrisp build (see "KosmicKrisp built for x86_64 from source"; not yet scripted).
 
-What macOS needs, in one place. Native code uses `#ifdef __APPLE__`; the Windows build under
-Wine keeps its run-time check (`MACOS-TEMP`). `runtime_macos_host()` is the single predicate: 1 in
-the native build, the Wine check in the Windows build, 0 on Linux.
+What macOS needs, in one place. All of it is compile-time `#ifdef SANCTUARY_MACOS`, which
+`gpu/CMakeLists.txt` defines for every target of a macOS build (a build without it stops with an
+`#error`). Windows and Linux builds contain none of it, and there is no run-time macOS check.
+Upstream shadPS4 platform code keeps `__APPLE__`.
 
 | Need | How |
 |---|---|
@@ -36,7 +37,8 @@ the native build, the Wine check in the Windows build, 0 on Linux.
 | Window surface | a Metal window (`SDL_Metal_CreateView`), Vulkan surface through `VK_EXT_metal_surface` |
 | Rosetta hides AVX in CPUID | `ROSETTA_ADVERTISE_AVX=1` (run.py), before the process starts |
 | shadPS4 forced its own `VK_DRIVER_FILES` | kept only when the caller set none |
-| No sparse binding | dense buffer arenas (as under CrossOver) |
+| No sparse binding | dense buffer arenas of 16 MiB, merged when a request spans several (see "Memory footprint") |
+| Guard wastes BDA page-table entries | the table skips `0x0fc0000000`–`0x7000000000` (`BdaIndex`, `get_bda_pointer`) |
 | glibc extras | `src/compat_mac.{h,c}`, `gpu/shim/sanctuary_mac_compat.h`: timed locks, `clock_nanosleep`, `getrandom`, `RUSAGE_THREAD`, `gettid`, `st_*tim`, sockets; epolls use `poll()` as on Windows |
 
 Checks before the build (a native x86_64 test program under Rosetta): the guest ranges reserve, `shm`
@@ -47,19 +49,55 @@ region, CoreFoundation's and a second thread's included.
 
 Result (native run 4): window, swapchain and presenter, guest threads, a 2 GiB dense arena at
 `0x7000000000`, save data mounted. No STOP or assertion after 5000+ log lines. The process uses
-~210% CPU and a **~6 GB physical footprint** on this 8 GB Mac, which needs a look (likely the guest
-memory pool and the zeroing of released pages).
+~210% CPU and a ~5.2 GB physical footprint on this 8 GB Mac, now ~2.9 GB (see "Memory footprint").
 
 Not done yet:
 - frame rate, rendering correctness, audio, gamepads and a long session;
-- the footprint;
+- the footprint inside the world (measured only in the intro and menus so far);
 - scripting and packaging the KosmicKrisp build and a `.app`;
 - `build.sh --test`'s unit tests on macOS;
 - `--gamepad` mode, which pumps SDL events off the main thread.
 
 Linux and native Windows have not been rebuilt since these changes.
 
+## Memory footprint
+
+Measured with `footprint -p` and `vmmap -v` on the running process, after ~2 minutes (intro and
+menus; no gameplay yet). The footprint counts dirty pages, compressed or swapped ones included.
+
+| | before | after |
+|---|---|---|
+| Process footprint | 5193 MB | 2926 MB |
+| Dense buffer arenas (GPU) | 2048 MiB | 320 MiB |
+| BDA page table (GPU) | 225 MiB | 48 MiB |
+| GPU page-state table | 512 MiB | touched pages only (malloc heap 671 → 133 MB) |
+| Guest memory pool (game data) | ~1 GB | ~1 GB |
+
+What changed:
+- **Dense arenas of 16 MiB** (`buffer_cache.cpp`). KosmicKrisp counts a whole allocation once the GPU
+  uses it, so one 2 GiB arena cost 2 GiB for ~160 MiB of resident guest memory. With 16 MiB pages
+  a request that spans pages merges their arenas (`MergeDenseArenas`): a new arena, resident blocks
+  copied on the GPU, page-table entries rewritten, the old memory freed after in-flight work. The
+  largest request seen is 147 MiB. `SANCTUARY_DENSE_ARENA_MB` picks another page size.
+- **The BDA page table skips the macOS guard.** It is indexed by guest block from address 0, and the
+  user range starts at 448 GiB, so 225 MiB of it covered the guard. `BdaIndex()` on the CPU and the
+  `get_bda_pointer` shader function subtract the gap (`Profile::bda_gap_start/end`); a page inside
+  it reads out of bounds, the same fault as an empty entry.
+- **The page manager's state table** (one entry per 4 KiB page of the 40-bit space, 512 MiB) was a
+  value-initialized `std::array`, so every page of it was written at start. It is now mapped
+  straight from the OS (`mmap` / `VirtualAlloc`). `calloc` did not help: mimalloc zeroed it.
+  This applies to every platform.
+- `Runtime: flexible maps=...` now ends with `released=` (pool bytes released and zeroed on macOS).
+  It is 0 in these runs, so `host_discard`'s memset costs nothing so far.
+
+Left: images (~230 MiB), other GPU buffers (stream, staging and download buffers, ~1 GB in all, not
+yet broken down), the guest pool (what the game touches), and the in-world numbers.
+
 ## Baseline: Windows release under CrossOver (2026-11-24)
+
+History from here on. Of the `MACOS-TEMP` patches below, the user-range move and dense arenas live on
+as `#ifdef SANCTUARY_MACOS` code in the native build; the Wine host check (`runtime_wine_on_macos`) and the
+TEB slot 63 borrow were removed with CrossOver support, so the Windows build no longer runs there.
 
 | | |
 |---|---|
@@ -360,8 +398,9 @@ Option 1, in its smallest form. It applies only when `Vulkan::SanctuaryMacosHost
   memory; a dense merge would need a content copy, new page-table entries and freeing the old
   arenas.
 
-Why dense is affordable: KosmicKrisp commits memory only when it is touched. A test program that
-bound a 4 GiB device-local buffer moved the process footprint from 36 MB to 40 MB. The device
+Why dense seemed affordable: a test program that bound a 4 GiB device-local buffer moved the
+process footprint from 36 MB to 40 MB. That holds only until the GPU uses the buffer: in the game
+the whole 2 GiB arena counted as dirty (see "Memory footprint"), so dense arenas now use 16 MiB pages. The device
 reports `sparseBinding=0`, one queue family (`0x7`), `maxBufferSize` 4096 MiB and one 5461 MiB heap
 whose only memory type is device-local, host-visible, coherent and cached. Arena pages are 2 GiB here
 (limited by `maxBufferSize`).
@@ -374,10 +413,9 @@ spanning request would behave.
 
 ### Direction
 
-Keep testing with the Windows build under CrossOver; it keeps finding problems a native Mac build
-would also hit. Next comes a native macOS x86_64 build under Rosetta: `MACOS-TEMP` becomes
-`#ifdef __APPLE__`, and the TCB slot comes from a pthread key, since macOS keeps per-thread data
-at `gs:8*key`. Native arm64 is a separate, larger project. The guest x86-64 code would need an
+(Written during the CrossOver work; since done.) The native macOS x86_64 build under Rosetta
+replaced CrossOver: `MACOS-TEMP` became `#ifdef SANCTUARY_MACOS`, and the TCB slot comes from a
+pthread key, since macOS keeps per-thread data at `gs:8*key`. Native arm64 is a separate, larger project. The guest x86-64 code would need an
 x86-64 → arm64 translator inside an arm64 process, because Rosetta only translates whole
 processes. It is still the long-term target if Rosetta's general availability ends after macOS 27,
 as Apple announced in 2025 (check Apple's current wording).

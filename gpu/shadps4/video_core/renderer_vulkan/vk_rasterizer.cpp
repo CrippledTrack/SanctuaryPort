@@ -2377,6 +2377,11 @@ void Rasterizer::ResetBindings(bool is_compute) {
             is_written ? vk::AccessFlagBits2::eShaderWrite : vk::AccessFlagBits2::eNone;
         runtime.AccessBuffer(buffer, offset, size, dst_stage,
                              vk::AccessFlagBits2::eShaderRead | write_flag);
+#ifdef SANCTUARY_MACOS
+        if (is_written) {
+            buffer_cache.ResolveRetiredArenaWrite(buffer, offset, size);
+        }
+#endif
     }
     bound_images.clear();
     bound_buffers.clear();

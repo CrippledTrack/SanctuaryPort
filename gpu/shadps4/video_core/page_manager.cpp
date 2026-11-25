@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <memory>
+#include <type_traits>
 #include <boost/container/small_vector.hpp>
 #include "sanctuary_toggles.h"
 #include "common/assert.h"
@@ -221,7 +223,34 @@ struct PageManager::Impl {
         release_pending();
     }
 
-    std::array<PageState, NUM_ADDRESS_PAGES> cached_pages{};
+    // sanctuary: one entry per 4 KiB page of the 40-bit space (512 MiB). Value-initializing a
+    // std::array member wrote zeros over all of it at start (and calloc did too, through
+    // mimalloc on macOS). Fresh anonymous pages read as zero and are committed only when a page
+    // is tracked: measured on macOS, ~512 MiB less footprint.
+    static constexpr size_t PAGE_TABLE_BYTES = NUM_ADDRESS_PAGES * sizeof(PageState);
+    static_assert(std::is_trivially_default_constructible_v<PageState>);
+    struct PagesDeleter {
+        void operator()(PageState* p) const noexcept {
+#ifdef _WIN64
+            VirtualFree(p, 0, MEM_RELEASE);
+#else
+            munmap(p, PAGE_TABLE_BYTES);
+#endif
+        }
+    };
+    std::unique_ptr<PageState[], PagesDeleter> cached_pages{[] {
+#ifdef _WIN64
+        void* pages = VirtualAlloc(nullptr, PAGE_TABLE_BYTES, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+#else
+        void* pages = mmap(nullptr, PAGE_TABLE_BYTES, PROT_READ | PROT_WRITE,
+                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (pages == MAP_FAILED) {
+            pages = nullptr;
+        }
+#endif
+        ASSERT_MSG(pages, "Cannot allocate the page state table");
+        return static_cast<PageState*>(pages);
+    }()};
 #ifdef PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP
     using LockType = Common::AdaptiveMutex;
 #else

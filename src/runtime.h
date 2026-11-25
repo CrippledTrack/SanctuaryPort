@@ -1,8 +1,11 @@
 #ifndef SANCTUARY_RUNTIME_H
 #define SANCTUARY_RUNTIME_H
+#if defined(__APPLE__) && !defined(SANCTUARY_MACOS)
+#error "macOS builds define SANCTUARY_MACOS (gpu/CMakeLists.txt); build through packaging/macos/build.sh"
+#endif
 #include <stdint.h>
 #include <stddef.h>
-#ifdef __APPLE__
+#ifdef SANCTUARY_MACOS
 #include "compat_mac.h"
 #endif
 #ifdef _WIN32
@@ -78,10 +81,6 @@ int32_t runtime_guest_errno(int host_errno);
 void *runtime_low_map(size_t size, int prot);
 /* Windows: reserves the PS4 user address range as a placeholder (no-op elsewhere). */
 void runtime_memory_reserve(void);
-/* MACOS-TEMP: Windows build running under Wine on a macOS host (docs/macos.md). */
-int runtime_wine_on_macos(void);
-/* macOS host: native build (__APPLE__) or, MACOS-TEMP, the Windows build under Wine. */
-int runtime_macos_host(void);
 uintptr_t runtime_ajm_resolve(const char *name);
 void runtime_ajm_report(void);
 /* AjmDecMp3ParseFrame (guest layout). */

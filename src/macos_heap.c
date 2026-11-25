@@ -6,7 +6,7 @@
  * system libraries included, and is given one region right above the PS4 user range,
  * [0xfc00000000, 0x10000000000): 16 GiB, below 1 TiB, never used by the guest. It may not
  * take memory from the OS anywhere else. */
-#ifdef __APPLE__
+#ifdef SANCTUARY_MACOS
 #include <mimalloc.h>
 #include <stdint.h>
 #include <stdio.h>

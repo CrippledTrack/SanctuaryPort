@@ -24,6 +24,7 @@
 #include "shader_recompiler/runtime_info.h"
 #include "sanctuary_settings.h"
 #include "video_core/amdgpu/liverpool.h"
+#include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_depth_stencil_state.h"
@@ -336,6 +337,8 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .supported_spirv = SpirvVersion1_6,
         .subgroup_size = instance.SubgroupSize(),
         .sparse_page_shift = sparse_page_shift,
+        .bda_gap_start = VideoCore::BufferCache::BDA_GAP_START,
+        .bda_gap_end = VideoCore::BufferCache::BDA_GAP_END,
         .support_int8 = instance.IsShaderInt8Supported(),
         .support_int16 = instance.IsShaderInt16Supported(),
         .support_int64 = instance.IsShaderInt64Supported(),

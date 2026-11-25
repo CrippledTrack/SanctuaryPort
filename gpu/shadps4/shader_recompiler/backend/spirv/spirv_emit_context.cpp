@@ -1224,9 +1224,23 @@ Id EmitContext::DefineGetBdaPointer() {
     // Get page BDA
     const auto page{OpShiftRightLogical(U64, address, caching_pagebits)};
     const auto page32{OpUConvert(U32[1], page)};
+    // macOS: the table skips the pages of an address gap that is never mapped; a page inside
+    // it reads out of bounds (zero with robustBufferAccess2), the same fault as an empty entry.
+    Id table_index32{page32};
+    if (profile.bda_gap_end > profile.bda_gap_start) {
+        const u64 gap_start_page = profile.bda_gap_start >> profile.sparse_page_shift;
+        const u64 gap_end_page = profile.bda_gap_end >> profile.sparse_page_shift;
+        const auto above{OpUGreaterThanEqual(U1[1], page, Constant(U64, gap_end_page))};
+        const auto inside{OpUGreaterThanEqual(U1[1], page, Constant(U64, gap_start_page))};
+        const auto shifted{OpISub(U64, page, Constant(U64, gap_end_page - gap_start_page))};
+        const auto index{OpSelect(U64, above, shifted,
+                                  OpSelect(U64, inside, Constant(U64, u64{0xffffffff}), page))};
+        table_index32 = OpUConvert(U32[1], index);
+    }
     const auto& bda_buffer{buffers[bda_pagetable_index]};
     const auto [bda_buffer_id, bda_pointer_type] = bda_buffer.Alias(PointerType::U64);
-    const auto bda_ptr{OpAccessChain(bda_pointer_type, bda_buffer_id, u32_zero_value, page32)};
+    const auto bda_ptr{
+        OpAccessChain(bda_pointer_type, bda_buffer_id, u32_zero_value, table_index32)};
     const auto bda{OpLoad(U64, bda_ptr)};
 
     // Check if page is GPU cached

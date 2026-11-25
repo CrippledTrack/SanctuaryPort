@@ -43,14 +43,11 @@ static uint64_t pool_size_bytes(void) {
 #define PAGE UINT64_C(16384)
 #define USER_MIN UINT64_C(0x1000000000)
 #define USER_MAX UINT64_C(0xfc00000000)
-/* MACOS-TEMP: swap to macOS-only (#ifdef __APPLE__) once native macOS builds exist.
- * macOS keeps [0x0fc0000000, 0x7000000000) unmappable in every process (vmmap: "Guard", ---/---),
- * so the user range there starts at 0x7000000000. While macOS is tested with the Windows build
- * under Wine/CrossOver, runtime_memory_reserve picks it at run time when Wine reports a Darwin host;
- * native Windows and Linux keep USER_MIN. docs/macos.md has the details. */
+/* macOS keeps [0x0fc0000000, 0x7000000000) unmappable in every process (vmmap: "Guard", ---/---),
+ * so there the user range starts at 0x7000000000; Windows and Linux keep USER_MIN.
+ * docs/macos.md has the details. */
 #define MACOS_USER_MIN UINT64_C(0x7000000000)
-/* Native macOS: the guard is in every process, so the user range moves at compile time. */
-#ifdef __APPLE__
+#ifdef SANCTUARY_MACOS
 static uintptr_t user_min=MACOS_USER_MIN; /* first guest address handed out from the user range */
 #else
 static uintptr_t user_min=USER_MIN; /* first guest address handed out from the user range */
@@ -162,33 +159,11 @@ static void region_insert(size_t at, HostRegion r) {
 static void region_erase(size_t at, size_t n) {
     memmove(regions+at,regions+at+n,(region_count-at-n)*sizeof(*regions)); region_count-=n;
 }
-/* MACOS-TEMP: Wine's ntdll exports wine_get_host_version; sysname "Darwin" means a macOS host.
- * Goes away when the macOS build sets user_min at compile time. */
-int runtime_wine_on_macos(void) {
-    static int known, darwin;
-    if (!known) {
-        typedef void (CDECL *HostVersion)(const char **sysname, const char **release);
-        HMODULE ntdll=GetModuleHandleA("ntdll.dll");
-        HostVersion host_version=ntdll ? (HostVersion)(void *)GetProcAddress(ntdll,"wine_get_host_version") : NULL;
-        const char *sysname=NULL, *release=NULL;
-        if (host_version) host_version(&sysname,&release);
-        darwin=sysname && !strcmp(sysname,"Darwin");
-        known=1;
-    }
-    return darwin;
-}
-/* macOS host, native or (MACOS-TEMP) the Windows build under Wine. */
-int runtime_macos_host(void) { return runtime_wine_on_macos(); }
 /* The guest ranges are reserved before anything else can be placed there (runtime_start). */
 void runtime_memory_reserve(void) {
     if (region_count) return;
-    if (runtime_wine_on_macos()) { /* MACOS-TEMP */
-        user_min=MACOS_USER_MIN;
-        printf("Runtime: Wine on macOS, PS4 user range starts at %#" PRIx64 " (macOS guard below it)\n",(uint64_t)user_min);
-    }
     if (!VirtualAlloc2(NULL,(void *)SYSTEM_MIN,LOW_MIN-SYSTEM_MIN,MEM_RESERVE|MEM_RESERVE_PLACEHOLDER,PAGE_NOACCESS,NULL,0))
         win_fail("reserving the PS4 system-managed range",SYSTEM_MIN,LOW_MIN-SYSTEM_MIN);
-    /* MACOS-TEMP: user_min below was USER_MIN (here and in region_insert). */
     if (!VirtualAlloc2(NULL,(void *)user_min,USER_MAX-user_min,MEM_RESERVE|MEM_RESERVE_PLACEHOLDER,PAGE_NOACCESS,NULL,0))
         win_fail("reserving the PS4 address range (link with --disable-high-entropy-va)",user_min,USER_MAX-user_min);
     region_insert(0,(HostRegion){SYSTEM_MIN,LOW_MIN,0,0});
@@ -299,7 +274,7 @@ static int pool(void) {
 /* Direct memory occupies [0,POOL_SIZE) of the memfd, flexible memory [POOL_SIZE,+FLEX_SPAN). */
 static int pool(void) {
     if (pool_fd>=0) return 0;
-#ifdef __APPLE__
+#ifdef SANCTUARY_MACOS
     /* macOS has no memfd: an unlinked POSIX shared memory object (sized once; ftruncate on it
      * works a single time). */
     char name[64];
@@ -315,9 +290,7 @@ static int pool(void) {
     backing_base=view;
     return 0;
 }
-#ifdef __APPLE__
-int runtime_wine_on_macos(void) { return 0; } /* a native build, not Wine */
-int runtime_macos_host(void) { return 1; }
+#ifdef SANCTUARY_MACOS
 /* Like Windows: macOS places host allocations anywhere, so the guest ranges are reserved before
  * anything else can land there, and unmapping inside them puts a reservation back. */
 static int reserve_fixed(uintptr_t address, uint64_t size) {
@@ -347,8 +320,6 @@ static void host_discard(uint64_t phys, uint64_t size) {
 }
 #else
 void runtime_memory_reserve(void) {}
-int runtime_wine_on_macos(void) { return 0; } /* MACOS-TEMP: the GPU library calls it everywhere */
-int runtime_macos_host(void) { return 0; }
 static int host_unmap(uintptr_t address, uint64_t size) { return munmap((void *)address,size); }
 static void host_discard(uint64_t phys, uint64_t size) {
     fallocate(pool_fd,FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE,(off_t)phys,(off_t)size);
@@ -399,9 +370,11 @@ static uint64_t flex_alloc(uint64_t size) {
     }
     return UINT64_MAX;
 }
+static uint64_t discarded_bytes; /* released pool bytes cleared for reuse (memory report) */
 static void flex_free(uint64_t phys, uint64_t size) {
     flex_set((phys-POOL_SIZE)/PAGE,size/PAGE,0);
     host_discard(phys,size);
+    discarded_bytes+=size;
 }
 static size_t vma_index(uintptr_t a) { /* first VMA with end > a */
     size_t lo=0, hi=vma_count;
@@ -450,7 +423,7 @@ static int overlaps(uintptr_t start, uintptr_t end, int ignore_reserved) {
 }
 /* First-fit search in the PS4 user range, starting from the hint. */
 static uintptr_t find_free(uintptr_t hint, uint64_t size, uint64_t alignment) {
-    uintptr_t at=align_up(hint<user_min ? user_min : hint, alignment); /* MACOS-TEMP: was USER_MIN */
+    uintptr_t at=align_up(hint<user_min ? user_min : hint, alignment);
     for (size_t i=vma_index(at); at+size<=USER_MAX; ++i) {
         if (i==vma_count || vmas[i].start>=at+size) return at;
         at=align_up(vmas[i].end,alignment);
@@ -641,6 +614,7 @@ static ABI int32_t direct_release(uint64_t start, uint64_t size) {
         live_bytes-=e-a;
     }
     host_discard(start,size); /* zero on reuse */
+    discarded_bytes+=size;
     write_unlock();
     flush_hooks();
     return 0;
@@ -810,7 +784,7 @@ void *runtime_low_map(size_t size, int prot) {
     }
     write_unlock();
     return p;
-#elif defined(__APPLE__)
+#elif defined(SANCTUARY_MACOS)
     /* The low area is reserved (runtime_memory_reserve): blocks replace the reservation, below the
      * macOS guard; the gaps stay reserved and still catch overruns. */
     void *p=NULL;
@@ -976,7 +950,7 @@ int runtime_memory_is_mapped(uintptr_t address, uint64_t size) {
 void runtime_memory_report(void) {
     printf("Runtime: direct memory allocations=%zu, maps=%zu, live=%" PRIu64 ", budget=%" PRIu64 "\n",
            allocations, maps, live_bytes, POOL_SIZE);
-    printf("Runtime: flexible maps=%zu, in use=%" PRIu64 ", protects=%zu, queries=%zu, regions=%zu\n",
-           flexible_maps, flexible_bytes, protects, queries, vma_count);
+    printf("Runtime: flexible maps=%zu, in use=%" PRIu64 ", protects=%zu, queries=%zu, regions=%zu, released=%" PRIu64 "\n",
+           flexible_maps, flexible_bytes, protects, queries, vma_count, discarded_bytes);
 }
 

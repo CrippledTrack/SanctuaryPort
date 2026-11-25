@@ -65,13 +65,28 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
            (u64{2} << arena_page_bits) > instance.GetMaxBufferSize()) {
         --arena_page_bits;
     }
+#ifdef SANCTUARY_MACOS
+    // macOS: a dense arena's memory is all committed once the GPU uses it (KosmicKrisp on
+    // Apple silicon), so dense arenas use 16 MiB pages instead of 2 GiB ones: in the menu that
+    // committed 336 MiB instead of 2048. Requests spanning pages merge arenas
+    // (MergeDenseArenas). SANCTUARY_DENSE_ARENA_MB picks another size.
+    if (instance.UsesDenseArenas()) {
+        u64 bits = MIN_DENSE_ARENA_PAGE_BITS;
+        if (const char* env = std::getenv("SANCTUARY_DENSE_ARENA_MB"); env && *env) {
+            bits = std::bit_width(std::max<u64>(std::strtoull(env, nullptr, 10), 1)) - 1 + 20;
+        }
+        arena_page_bits = std::clamp(bits, MIN_DENSE_ARENA_PAGE_BITS, arena_page_bits);
+        std::printf("GPU: dense buffer arena pages of %llu MiB\n",
+                    (unsigned long long)((u64{1} << arena_page_bits) >> 20));
+    }
+#endif
     arena_page_size = u64{1} << arena_page_bits;
     num_arena_pages = u64{1} << (ADDRESS_SPACE_BITS - arena_page_bits);
     if (arena_page_bits != MAX_ARENA_PAGE_BITS) {
         LOG_INFO(Render_Vulkan, "Buffer arenas of {} MiB (driver buffer limit {} MiB)",
                  arena_page_size >> 20, instance.GetMaxBufferSize() >> 20);
     }
-    // MACOS-TEMP: dense arenas (no sparse binding) take the plain buffer's requirements.
+    // macOS: dense arenas (no sparse binding) take the plain buffer's requirements.
     const vk::BufferCreateInfo probe_ci = {
         .flags = instance.UsesDenseArenas()
                      ? vk::BufferCreateFlags{}
@@ -114,6 +129,11 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
     }
 
     bda_pagetable_max_blocks = blocks_per_arena_page * num_arena_pages;
+    if (BDA_GAP_END > BDA_GAP_START) {
+        bda_gap_end_block = BDA_GAP_END >> block_shift;
+        bda_gap_blocks = (BDA_GAP_END - BDA_GAP_START) >> block_shift;
+    }
+    bda_pagetable_max_entries = BdaIndex(bda_pagetable_max_blocks - 1) + 1;
     fault_manager = std::make_unique<FaultManager>(instance, scheduler, *this, block_shift,
                                                    bda_pagetable_max_blocks);
     // sanctuary (GitHub #61): the table used to cover the whole 40-bit space from the start
@@ -123,13 +143,14 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
 }
 
 void BufferCache::GrowBdaPageTable(u64 end_block) {
+    // end_block: table entries needed (BdaIndex of the last block + 1).
     if (end_block <= bda_pagetable_blocks) {
         return;
     }
     // Whole arena pages, and at least half again the current size: few regrowths.
     u64 blocks = Common::AlignUp(end_block, u64{blocks_per_arena_page});
     blocks = std::max(blocks, bda_pagetable_blocks + bda_pagetable_blocks / 2);
-    blocks = std::min(Common::AlignUp(blocks, u64{blocks_per_arena_page}), bda_pagetable_max_blocks);
+    blocks = std::min(Common::AlignUp(blocks, u64{blocks_per_arena_page}), bda_pagetable_max_entries);
     ASSERT(blocks >= end_block);
     const u64 old_size = bda_pagetable_blocks * sizeof(vk::DeviceAddress);
     const u64 new_size = blocks * sizeof(vk::DeviceAddress);
@@ -146,8 +167,7 @@ void BufferCache::GrowBdaPageTable(u64 end_block) {
     }
     bda_pagetable_buffer = std::move(table);
     bda_pagetable_blocks = blocks;
-    LOG_INFO(Render_Vulkan, "BDA page table: {} KiB, guest memory below {:#x}", new_size >> 10,
-             blocks << block_shift);
+    LOG_INFO(Render_Vulkan, "BDA page table: {} KiB, {} entries", new_size >> 10, blocks);
 }
 
 BufferCache::~BufferCache() = default;
@@ -457,18 +477,31 @@ void BufferCache::ProcessFaultBuffer() {
 }
 
 void BufferCache::SynchronizeDmaBuffers() {
+    // sanctuary: a resident range can cross from one arena into the next (adjacent ranges
+    // coalesce), so it is synchronized one arena at a time.
     for (const auto& range : resident_ranges) {
-        const u64 page = range.start >> (arena_page_bits - block_shift);
-        const VAddr device_addr = range.start << block_shift;
-        const u64 size = (range.end - range.start) << block_shift;
-        SynchronizeMemory(address_space[page], device_addr, size, false, false);
+        for (u64 block = range.start; block < range.end;) {
+            const auto* arena = address_space[block >> blocks_per_arena_page_shift];
+            const u64 arena_end = (arena->cpu_addr + arena->SizeBytes()) >> block_shift;
+            const u64 end = std::min<u64>(range.end, arena_end);
+            SynchronizeMemory(arena, block << block_shift, static_cast<u32>((end - block) << block_shift),
+                              false, false);
+            block = end;
+        }
     }
 }
 
 const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     const u64 first_page = first_block >> blocks_per_arena_page_shift;
     const u64 last_page = last_block >> blocks_per_arena_page_shift;
-    ASSERT_MSG(last_page - first_page <= 1,
+#ifdef SANCTUARY_MACOS
+    if (instance.UsesDenseArenas() && first_page != last_page &&
+        (!address_space[first_page] || address_space[first_page] != address_space[last_page])) {
+        // Dense pages are small; a request may span any number of them.
+        return MergeDenseArenas(first_page, last_page);
+    }
+#endif
+    ASSERT_MSG(instance.UsesDenseArenas() || last_page - first_page <= 1,
                "Buffer request cannot span more than two VA arena pages");
 
     const auto* first_arena = address_space[first_page];
@@ -477,7 +510,8 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
         if (!first_arena) {
             const u64 base_block = Common::AlignDownPow2<u64>(first_block, blocks_per_arena_page);
             const u64 num_pages = last_page - first_page + 1;
-            const bool dense = instance.UsesDenseArenas(); // MACOS-TEMP
+#ifdef SANCTUARY_MACOS
+            const bool dense = instance.UsesDenseArenas();
             auto* new_arena =
                 &arenas.emplace_back(instance, base_block << block_shift,
                                      num_pages << arena_page_bits,
@@ -485,26 +519,14 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
             if (dense) {
                 BindDenseArena(new_arena);
             }
+#else
+            auto* new_arena = &arenas.emplace_back(instance, base_block << block_shift,
+                                                   num_pages << arena_page_bits, MemoryType::Sparse);
+#endif
             address_space[first_page] = new_arena;
             address_space[last_page] = new_arena;
         }
         return address_space[first_page];
-    }
-
-    if (instance.UsesDenseArenas()) {
-        // MACOS-TEMP: merging arenas rebinds the same memory with sparse binding; dense arenas
-        // would need a content copy, new page-table entries and freeing the old arenas. Not done
-        // yet: stop loudly so a run shows whether the game ever needs it.
-        std::fprintf(stderr,
-                     "STOP: dense buffer arenas (macOS) cannot merge: request blocks %#llx-%#llx "
-                     "(addresses %#llx-%#llx) spans arena pages %llu and %llu (%s, %s)\n",
-                     (unsigned long long)first_block, (unsigned long long)last_block,
-                     (unsigned long long)(first_block << block_shift),
-                     (unsigned long long)((last_block + 1) << block_shift),
-                     (unsigned long long)first_page, (unsigned long long)last_page,
-                     first_arena ? "has an arena" : "empty", last_arena ? "has an arena" : "empty");
-        std::fflush(stderr);
-        std::exit(21);
     }
 
     LOG_WARNING(Render, "Migrating arena");
@@ -540,9 +562,10 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     return new_arena;
 }
 
-// MACOS-TEMP: a dense arena gets all its memory at once. Allocated directly rather than through
-// VMA: VMA's budget would count the whole arena, while the driver tested (KosmicKrisp on Apple
-// silicon) commits pages only when they are touched (a bound 4 GiB buffer added ~4 MiB).
+#ifdef SANCTUARY_MACOS
+// macOS: a dense arena gets all its memory at once, allocated directly rather than through
+// VMA (whose budget would count it). KosmicKrisp commits a bound buffer only when touched, but
+// once the GPU uses it the whole allocation counts (vmmap: all of it dirty), hence small pages.
 void BufferCache::BindDenseArena(Buffer* arena) {
     const auto device = instance.GetDevice();
     const vk::MemoryAllocateFlagsInfo flags_info = {
@@ -555,6 +578,7 @@ void BufferCache::BindDenseArena(Buffer* arena) {
     };
     const auto memory = Vulkan::Check(device.allocateMemory(alloc_info));
     arena->BindDenseArenaMemory(device, memory);
+    dense_arena_memory.emplace_back(arena, memory);
     dense_arena_bytes += arena->SizeBytes();
     std::printf("GPU: dense buffer arena %#llx-%#llx (%llu MiB; %llu MiB in all)\n",
                 (unsigned long long)arena->cpu_addr,
@@ -564,6 +588,125 @@ void BufferCache::BindDenseArena(Buffer* arena) {
     std::fflush(stdout);
 }
 
+// macOS: dense arenas cannot be rebound like sparse ones. The merged arena gets new memory,
+// the old arenas' resident blocks are copied into it on the GPU (after the work already recorded
+// against them), their page-table entries point at it, and the old memory is freed once that
+// work has completed. The old Buffer objects stay in `arenas` (pointers into a deque), unused.
+const Buffer* BufferCache::MergeDenseArenas(u64 first_page, u64 last_page) {
+    VAddr lo = first_page << arena_page_bits;
+    VAddr hi = (last_page + 1) << arena_page_bits;
+    boost::container::small_vector<const Buffer*, 8> old_arenas;
+    for (u64 page = first_page; page <= last_page; ++page) {
+        const Buffer* old = address_space[page];
+        if (!old || std::ranges::find(old_arenas, old) != old_arenas.end()) {
+            continue;
+        }
+        old_arenas.push_back(old);
+        lo = std::min<VAddr>(lo, old->cpu_addr);
+        hi = std::max<VAddr>(hi, old->cpu_addr + old->SizeBytes());
+    }
+    ASSERT_MSG(hi - lo <= instance.GetMaxBufferSize(),
+               "Dense buffer arena {:#x}-{:#x} exceeds the driver's buffer size limit", lo, hi);
+
+    auto* merged = &arenas.emplace_back(instance, lo, hi - lo, MemoryType::DenseArena);
+    BindDenseArena(merged);
+
+    const u64 lo_block = lo >> block_shift;
+    const u64 hi_block = hi >> block_shift;
+    u64 table_entries{};
+    for (const Buffer* old : old_arenas) {
+        const u64 old_lo = old->cpu_addr >> block_shift;
+        const u64 old_hi = (old->cpu_addr + old->SizeBytes()) >> block_shift;
+        boost::container::small_vector<vk::BufferCopy, 16> copies;
+        resident_ranges.ForEachInRange(old_lo, old_hi, [&](const Backing& backing) {
+            const u64 start = std::max(old_lo, backing.start);
+            const u64 end = std::min(old_hi, backing.end);
+            if (start < end) {
+                copies.push_back(vk::BufferCopy{
+                    .srcOffset = (start << block_shift) - old->cpu_addr,
+                    .dstOffset = (start << block_shift) - lo,
+                    .size = (end - start) << block_shift,
+                });
+                table_entries += end - start;
+            }
+        });
+        if (!copies.empty()) {
+            runtime.CopyBuffer(old, merged, copies);
+        }
+    }
+
+    // Page-table entries of every resident block in the merged range.
+    if (table_entries) {
+        const auto staging = staging_pool.Request(table_entries * sizeof(vk::DeviceAddress),
+                                                  MemoryType::HostUncached);
+        auto* bda_addrs = reinterpret_cast<vk::DeviceAddress*>(staging.mapped);
+        u64 offset = staging.offset;
+        boost::container::small_vector<vk::BufferCopy, 16> copies;
+        resident_ranges.ForEachInRange(lo_block, hi_block, [&](const Backing& backing) {
+            const u64 start = std::max(lo_block, backing.start);
+            const u64 end = std::min(hi_block, backing.end);
+            if (start >= end) {
+                return;
+            }
+            for (u64 block = start; block < end; ++block) {
+                *(bda_addrs++) = merged->BufferDeviceAddress() + (block << block_shift) - lo;
+            }
+            const u64 bytes = (end - start) * sizeof(vk::DeviceAddress);
+            copies.emplace_back(offset, BdaIndex(start) * sizeof(vk::DeviceAddress), bytes);
+            offset += bytes;
+        });
+        staging.Flush();
+        runtime.CopyBuffer(staging.buffer, bda_pagetable_buffer.get(), copies);
+    }
+
+    for (u64 page = lo >> arena_page_bits; page < (hi >> arena_page_bits); ++page) {
+        address_space[page] = merged;
+    }
+
+    const auto device = instance.GetDevice();
+    for (const Buffer* old : old_arenas) {
+        const auto it = std::ranges::find(dense_arena_memory, old,
+                                          &std::pair<const Buffer*, vk::DeviceMemory>::first);
+        ASSERT(it != dense_arena_memory.end());
+        const vk::DeviceMemory memory = it->second;
+        dense_arena_memory.erase(it);
+        dense_arena_bytes -= old->SizeBytes();
+        scheduler.DeferOperation([device, memory, bytes = old->SizeBytes()] {
+            device.freeMemory(memory);
+            std::printf("GPU: freed a merged dense arena's %llu MiB\n", (unsigned long long)(bytes >> 20));
+        });
+    }
+    std::printf("GPU: merged %zu dense buffer arenas into %#llx-%#llx (%llu MiB; %llu MiB in all)\n",
+                old_arenas.size(), (unsigned long long)lo, (unsigned long long)hi,
+                (unsigned long long)((hi - lo) >> 20),
+                (unsigned long long)(dense_arena_bytes >> 20));
+    std::fflush(stdout);
+    return merged;
+}
+#endif
+
+#ifdef SANCTUARY_MACOS
+// A merge copies the old arenas' contents and points their pages at the merged arena, but a
+// descriptor written earlier in the same draw still names the old arena (sparse merges alias the
+// same memory; dense ones cannot). Reads through it see the copied data; writes would be lost, so
+// Rasterizer::ResetBindings hands each written binding here once the draw is recorded. The old
+// memory is freed only after this tick's work completes, so the copy still reads it.
+void BufferCache::ResolveRetiredArenaWrite(const Buffer* buffer, u64 offset, u64 size) {
+    if (buffer->mem_type != MemoryType::DenseArena) {
+        return;
+    }
+    const VAddr addr = buffer->cpu_addr + offset;
+    const Buffer* current = address_space[addr >> arena_page_bits];
+    if (!current || current == buffer) {
+        return;
+    }
+    const vk::BufferCopy copy{offset, addr - current->cpu_addr, size};
+    runtime.CopyBuffer(buffer, current, {&copy, 1});
+    std::printf("GPU: a draw wrote through a merged dense arena; %llu bytes copied over\n",
+                (unsigned long long)size);
+}
+
+#endif
 void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_block) {
     u32 resident_blocks{};
     IntervalList bind_ranges;
@@ -577,7 +720,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
     }
     SanctuaryStats::Timer timer{SanctuaryStats::t_resident};
 
-    // MACOS-TEMP: a dense arena's memory is already bound (BindDenseArena): no allocation and
+    // macOS: a dense arena's memory is already bound (BindDenseArena): no allocation and
     // no sparse bind, only the page-table entries below.
     const bool dense = instance.UsesDenseArenas();
     const vk::MemoryAllocateInfo alloc_info = {
@@ -587,14 +730,14 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
     const auto device_memory =
         dense ? vk::DeviceMemory{} : Vulkan::Check(instance.GetDevice().allocateMemory(alloc_info));
     resident_bytes += alloc_info.allocationSize;
-    GrowBdaPageTable(last_block + 1);
+    GrowBdaPageTable(BdaIndex(last_block) + 1);
 
     boost::container::small_vector<vk::BufferCopy, 8> copies;
     const auto staging =
         staging_pool.Request(resident_blocks * sizeof(vk::DeviceAddress), MemoryType::HostUncached);
 
     u64 memory_offset{};
-    ArenaBinds* binds = dense ? nullptr : BindsForArena(arena); // MACOS-TEMP: none when dense
+    ArenaBinds* binds = dense ? nullptr : BindsForArena(arena); // none when dense
     auto* bda_addrs = reinterpret_cast<vk::DeviceAddress*>(staging.mapped);
     u64 offset = staging.offset;
     for (const auto& range : bind_ranges) {
@@ -622,7 +765,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
             *(bda_addrs++) = arena->BufferDeviceAddress() + bind.resourceOffset + block;
         }
         const u64 copy_size = (backing.end - backing.start) * sizeof(vk::DeviceAddress);
-        copies.emplace_back(offset, backing.start * sizeof(vk::DeviceAddress), copy_size);
+        copies.emplace_back(offset, BdaIndex(backing.start) * sizeof(vk::DeviceAddress), copy_size);
         offset += copy_size;
     }
 

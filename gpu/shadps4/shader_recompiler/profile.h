@@ -14,6 +14,10 @@ struct Profile {
     u32 supported_spirv{0x00010000};
     u32 subgroup_size{};
     u32 sparse_page_shift{};
+    /// macOS: guest addresses [bda_gap_start, bda_gap_end) can never be mapped (the macOS
+    /// guard); the BDA page table leaves them out. 0, 0: no gap.
+    u64 bda_gap_start{};
+    u64 bda_gap_end{};
     bool support_int8{};
     bool support_int16{};
     bool support_int64{};

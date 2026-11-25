@@ -3,6 +3,10 @@
 
 #pragma once
 
+#if defined(__APPLE__) && !defined(SANCTUARY_MACOS)
+#error "macOS builds define SANCTUARY_MACOS (gpu/CMakeLists.txt); build through packaging/macos/build.sh"
+#endif
+
 #include <span>
 #include <unordered_map>
 
@@ -19,9 +23,6 @@ struct WindowSystemInfo;
 VK_DEFINE_HANDLE(VmaAllocator)
 
 namespace Vulkan {
-
-/// MACOS-TEMP: true on a macOS host (now: the Windows build under Wine on macOS).
-bool SanctuaryMacosHost();
 
 class Instance {
 public:
@@ -101,10 +102,16 @@ public:
         return sparse_queue;
     }
 
-    /// MACOS-TEMP: the driver has no sparse binding (macOS only); buffer arenas are dense.
+    /// macOS: the driver has no sparse binding; buffer arenas are dense. Never elsewhere.
+#ifdef SANCTUARY_MACOS
     bool UsesDenseArenas() const {
         return dense_arenas;
     }
+#else
+    static constexpr bool UsesDenseArenas() {
+        return false;
+    }
+#endif
 
     vk::Queue GetPresentQueue() const {
         return present_queue;
@@ -578,7 +585,9 @@ private:
     vk::Queue present_queue;
     vk::Queue graphics_queue;
     vk::Queue sparse_queue;
-    bool dense_arenas{}; // MACOS-TEMP: see UsesDenseArenas
+#ifdef SANCTUARY_MACOS
+    bool dense_arenas{}; // see UsesDenseArenas
+#endif
     std::vector<vk::PhysicalDevice> physical_devices;
     std::vector<std::string> available_extensions;
     std::unordered_map<vk::Format, vk::FormatProperties3> format_properties;
