@@ -23,6 +23,9 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #endif
+#ifndef MAP_NORESERVE
+#define MAP_NORESERVE 0 /* macOS: reservations never commit memory */
+#endif
 /* sceKernelGetDirectMemorySize on retail PS4: 5056 MiB. SANCTUARY_DMEM_MB raises it (the resolution
  * patches above 1080p need about 4 GiB more; run.sh sets it). */
 static uint64_t pool_size_bytes(void) {
@@ -46,7 +49,14 @@ static uint64_t pool_size_bytes(void) {
  * under Wine/CrossOver, runtime_memory_reserve picks it at run time when Wine reports a Darwin host;
  * native Windows and Linux keep USER_MIN. docs/macos.md has the details. */
 #define MACOS_USER_MIN UINT64_C(0x7000000000)
+/* Native macOS: the guard is in every process, so the user range moves at compile time. */
+#ifdef __APPLE__
+static uintptr_t user_min=MACOS_USER_MIN; /* first guest address handed out from the user range */
+#else
 static uintptr_t user_min=USER_MIN; /* first guest address handed out from the user range */
+#endif
+/* macOS: the guard starts inside the low area; host-owned low blocks stop below it. */
+#define MACOS_LOW_MAX UINT64_C(0x0fc0000000)
 /* Host-owned memory the guest can see (image, stacks, trampolines) lives in
  * [LOW_MIN, USER_MIN): PS4 code packs pointers into 40-bit fields. */
 #define LOW_MIN UINT64_C(0x0800000000)
@@ -167,6 +177,8 @@ int runtime_wine_on_macos(void) {
     }
     return darwin;
 }
+/* macOS host, native or (MACOS-TEMP) the Windows build under Wine. */
+int runtime_macos_host(void) { return runtime_wine_on_macos(); }
 /* The guest ranges are reserved before anything else can be placed there (runtime_start). */
 void runtime_memory_reserve(void) {
     if (region_count) return;
@@ -287,26 +299,68 @@ static int pool(void) {
 /* Direct memory occupies [0,POOL_SIZE) of the memfd, flexible memory [POOL_SIZE,+FLEX_SPAN). */
 static int pool(void) {
     if (pool_fd>=0) return 0;
+#ifdef __APPLE__
+    /* macOS has no memfd: an unlinked POSIX shared memory object (sized once; ftruncate on it
+     * works a single time). */
+    char name[64];
+    snprintf(name,sizeof name,"/sanctuary-%d",(int)getpid());
+    pool_fd=shm_open(name,O_RDWR|O_CREAT|O_EXCL,0600);
+    if (pool_fd>=0) { shm_unlink(name); fcntl(pool_fd,F_SETFD,FD_CLOEXEC); }
+#else
     pool_fd=memfd_create("sanctuary-guest-memory", MFD_CLOEXEC);
+#endif
     if (pool_fd<0 || ftruncate(pool_fd,(off_t)(POOL_SIZE+FLEX_SPAN))) return -1;
     void *view=mmap(NULL,POOL_SIZE+FLEX_SPAN,PROT_READ|PROT_WRITE,MAP_SHARED|MAP_NORESERVE,pool_fd,0);
     if (view==MAP_FAILED) return -1;
     backing_base=view;
     return 0;
 }
+#ifdef __APPLE__
+int runtime_wine_on_macos(void) { return 0; } /* a native build, not Wine */
+int runtime_macos_host(void) { return 1; }
+/* Like Windows: macOS places host allocations anywhere, so the guest ranges are reserved before
+ * anything else can land there, and unmapping inside them puts a reservation back. */
+static int reserve_fixed(uintptr_t address, uint64_t size) {
+    void *p=mmap((void *)address,size,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
+    if (p==MAP_FAILED) return -1;
+    if ((uintptr_t)p!=address) { munmap(p,size); return -1; }
+    return 0;
+}
+void runtime_memory_reserve(void) {
+    static int done;
+    if (done) return;
+    done=1;
+    if (reserve_fixed(SYSTEM_MIN,LOW_MIN-SYSTEM_MIN) || reserve_fixed(LOW_MIN,MACOS_LOW_MAX-LOW_MIN) ||
+        reserve_fixed(user_min,USER_MAX-user_min)) {
+        fprintf(stderr,"STOP: reserving the PS4 address ranges failed (%s)\n",strerror(errno));
+        exit(21);
+    }
+    printf("Runtime: macOS, PS4 user range starts at %#" PRIx64 " (macOS guard below it)\n",(uint64_t)user_min);
+}
+static int host_unmap(uintptr_t address, uint64_t size) {
+    return mmap((void *)address,size,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0)==MAP_FAILED ? -1 : 0;
+}
+static void host_discard(uint64_t phys, uint64_t size) {
+    /* No hole punching in shared memory: released pages are cleared so they read as zero when
+     * reused, as on the other systems. */
+    memset((unsigned char *)backing_base+phys,0,size);
+}
+#else
 void runtime_memory_reserve(void) {}
 int runtime_wine_on_macos(void) { return 0; } /* MACOS-TEMP: the GPU library calls it everywhere */
+int runtime_macos_host(void) { return 0; }
+static int host_unmap(uintptr_t address, uint64_t size) { return munmap((void *)address,size); }
+static void host_discard(uint64_t phys, uint64_t size) {
+    fallocate(pool_fd,FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE,(off_t)phys,(off_t)size);
+}
+#endif
 static int host_map(uintptr_t address, uint64_t size, int prot, int reserved, uint64_t phys) {
     void *mapped = !reserved
         ? mmap((void *)address,size,prot,MAP_SHARED|MAP_FIXED,pool_fd,(off_t)phys)
         : mmap((void *)address,size,PROT_NONE,MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE|MAP_FIXED,-1,0);
     return mapped==MAP_FAILED ? -1 : 0;
 }
-static int host_unmap(uintptr_t address, uint64_t size) { return munmap((void *)address,size); }
 static int host_protect(uintptr_t address, uint64_t size, int prot) { return mprotect((void *)address,size,prot); }
-static void host_discard(uint64_t phys, uint64_t size) {
-    fallocate(pool_fd,FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE,(off_t)phys,(off_t)size);
-}
 #endif
 static void queue_hook(int kind, uintptr_t address, uint64_t size) {
     GpuRange hook = kind==HOOK_MAP ? hook_map : kind==HOOK_UNMAP ? hook_unmap : hook_invalidate;
@@ -753,6 +807,17 @@ void *runtime_low_map(size_t size, int prot) {
     while (!p && low_next+size<=USER_MIN) {
         p=VirtualAlloc((void *)low_next,size,MEM_RESERVE|MEM_COMMIT,win_prot(prot));
         low_next+=size+UINT64_C(65536); /* unmapped gap catches overruns; allocation granularity */
+    }
+    write_unlock();
+    return p;
+#elif defined(__APPLE__)
+    /* The low area is reserved (runtime_memory_reserve): blocks replace the reservation, below the
+     * macOS guard; the gaps stay reserved and still catch overruns. */
+    void *p=NULL;
+    if (low_next+size<=MACOS_LOW_MAX) {
+        p=mmap((void *)low_next,size,prot,MAP_PRIVATE|MAP_ANONYMOUS|MAP_FIXED,-1,0);
+        if (p==MAP_FAILED) p=NULL;
+        low_next+=size+PAGE;
     }
     write_unlock();
     return p;

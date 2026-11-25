@@ -17,6 +17,7 @@ import sys
 import time
 
 WINDOWS = sys.platform == 'win32'
+MACOS = sys.platform == 'darwin'  # native macOS build: x86_64 under Rosetta 2 (docs/macos.md)
 EXE_SUFFIX = '.exe' if WINDOWS else ''
 if WINDOWS:
     import ctypes
@@ -112,7 +113,7 @@ def launch_prefix(env):
 
 def find_executable(name):
     """bin/ (packaged), else out/ (built with build.sh)."""
-    for candidate in (PORT / 'bin' / name, PORT / 'out' / name):
+    for candidate in (PORT / 'bin' / name, PORT / 'out' / name, PORT / 'out' / 'macos' / name):
         if candidate.is_file():
             return candidate
     return None
@@ -225,6 +226,13 @@ def main():
     if not (data / 'sanctuary.ini').exists() and (data / 'gow3.ini').is_file():
         (data / 'gow3.ini').rename(data / 'sanctuary.ini')
     env.setdefault('SANCTUARY_CONFIG', str(data / 'sanctuary.ini'))
+    if MACOS:
+        # Rosetta 2 runs AVX/AVX2 code but only reports them in CPUID when asked to; the game's code
+        # needs AVX. It must be set before the probe starts (Rosetta reads it at launch).
+        env.setdefault('ROSETTA_ADVERTISE_AVX', '1')
+        # The x86_64 KosmicKrisp build (docs/macos.md) as the Vulkan driver, when given.
+        if env.get('SANCTUARY_KOSMICKRISP_ICD') and not env.get('VK_DRIVER_FILES'):
+            env['VK_DRIVER_FILES'] = env['SANCTUARY_KOSMICKRISP_ICD']
     # Values this script derived on the previous start ("Apply and restart" inherits them) are
     # derived again from the new options.
     for key in env.pop('SANCTUARY_DERIVED', '').split(','):

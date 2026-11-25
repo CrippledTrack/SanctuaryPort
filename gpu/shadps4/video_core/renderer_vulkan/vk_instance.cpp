@@ -22,14 +22,14 @@
 
 #include <vk_mem_alloc.h>
 
-// MACOS-TEMP: src/runtime_memory.c (0 on Linux). Becomes `#ifdef __APPLE__` with a native macOS
-// build; while macOS is tested with the Windows build under Wine/CrossOver it is a run-time check.
-extern "C" int runtime_wine_on_macos(void);
+// src/runtime_memory.c: 1 in the native macOS build, the Wine check in the Windows build
+// (MACOS-TEMP: the Windows build under Wine/CrossOver on macOS), 0 on Linux.
+extern "C" int runtime_macos_host(void);
 
 namespace Vulkan {
 
-bool SanctuaryMacosHost() { // MACOS-TEMP
-    static const bool macos = runtime_wine_on_macos() != 0;
+bool SanctuaryMacosHost() {
+    static const bool macos = runtime_macos_host() != 0;
     return macos;
 }
 

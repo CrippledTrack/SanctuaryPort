@@ -108,7 +108,9 @@ void Liverpool::ProcessCommands() {
 
 void Liverpool::Process(std::stop_token stoken) {
     Common::SetCurrentThreadName("shadPS4:GpuCommandProcessor");
-#ifndef _WIN32
+#if defined(__APPLE__)
+    // macOS: no per-thread CPU clock id; the GPU thread's CPU time is not reported.
+#elif !defined(_WIN32)
     if (clockid_t clock; pthread_getcpuclockid(pthread_self(), &clock) == 0) {
         SanctuaryStats::gpu_thread_clock.store(static_cast<int>(clock));
     }
@@ -116,7 +118,7 @@ void Liverpool::Process(std::stop_token stoken) {
     SanctuaryStats::gpu_thread_id.store(GetCurrentThreadId());
 #endif
     gpu_id = std::this_thread::get_id();
-#if defined(__linux__) || defined(_WIN32)
+#if defined(__linux__) || defined(_WIN32) || defined(__APPLE__)
     gpu_tid = gettid();
 #endif
 

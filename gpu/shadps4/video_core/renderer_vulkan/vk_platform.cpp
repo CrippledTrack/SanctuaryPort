@@ -268,7 +268,8 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
         _NSGetExecutablePath(path, &length);
         return std::filesystem::path(path).parent_path();
     }();
-    setenv("VK_DRIVER_FILES", icd_path.c_str(), true);
+    // sanctuary: a driver the caller chose (run.py: the x86_64 KosmicKrisp, docs/macos.md) wins.
+    setenv("VK_DRIVER_FILES", icd_path.c_str(), false);
 #endif
 
     static vk::detail::DynamicLoader dl;

@@ -1,11 +1,63 @@
 # macOS
 
-Status: **the game runs** (run 6): the Windows build under CrossOver (Rosetta 2), with an x86_64 build
-of KosmicKrisp (Mesa's Vulkan driver on Metal 4) in place of MoltenVK. Three macOS-specific
-patches, all marked `MACOS-TEMP`, are needed: the memory range, the TLS slot and dense buffer arenas
-(no sparse binding). Performance has not been measured yet. This file starts from the baseline taken
-before any macOS work: the unmodified Windows release run on a Mac through Rosetta 2 and CrossOver's
-Wine.
+Status: **the game runs natively** (no Wine) as an x86_64 macOS build under Rosetta 2, with an x86_64
+build of KosmicKrisp (Mesa's Vulkan driver on Metal 4). It also runs as the Windows build under
+CrossOver (run 6 below). Performance, rendering correctness and long sessions have not been measured
+yet. The native build is described first. The rest of the file is the history: the baseline (the
+unmodified Windows release under CrossOver) and each blocker found on the way.
+
+## Native macOS build (x86_64, Rosetta 2)
+
+```bash
+bash packaging/macos/deps.sh     # x86_64 libraries into out/macos-deps (sources: see the script)
+bash packaging/macos/build.sh    # out/macos/sanctuary-probe, out/macos/lib/*.dylib
+SANCTUARY_GAME_DIR=~/d3/CUSA00242-app SANCTUARY_PATCH_DIR=~/d3/CUSA00242-patch \
+  SANCTUARY_KOSMICKRISP_ICD=<x86_64 KosmicKrisp>/share/vulkan/icd.d/kosmickrisp_mesa_icd.x86_64.json \
+  python3 -u run.py
+```
+
+Needs Homebrew `cmake ninja pkg-config glslang boost robin-map vulkan-headers` and the x86_64
+KosmicKrisp build (see "KosmicKrisp built for x86_64 from source"; not yet scripted).
+
+What macOS needs, in one place. Native code uses `#ifdef __APPLE__`; the Windows build under
+Wine keeps its run-time check (`MACOS-TEMP`). `runtime_macos_host()` is the single predicate: 1 in
+the native build, the Wine check in the Windows build, 0 on Linux.
+
+| Need | How |
+|---|---|
+| Guard `0x0fc0000000`–`0x7000000000` | user range from `0x7000000000`; LOW capped below the guard (`runtime_memory.c`) |
+| Host allocations landing in guest ranges | SYSTEM, LOW and USER reserved at start, as on Windows; unmapping puts a reservation back |
+| No `memfd_create` | unlinked `shm_open` object; released pages zeroed through the pool view (no hole punching) |
+| `gs` cannot be moved | the guest TCB lives in a pthread key: macOS x86_64 keeps per-thread data at `gs:[8*key]`, and the loader rewrites `gs:[0]` loads to that slot (`patch_tcb_loads`, as on Windows) |
+| **Heap objects must sit below 1 TiB** (the game packs pointers into 40 bits) | mimalloc takes over the process's malloc as the default zone, confined to `0xfc00000000`–`0x10000000000` (`src/macos_heap.c`); system libraries' allocations land there too |
+| Write faults arrive as **SIGBUS** | the GPU write-tracking handler takes SIGBUS as well as SIGSEGV |
+| Signal contexts | `src/host_ucontext.h`: `HOST_GREGS(uc)[REG_*]` over Linux gregs or the macOS thread state |
+| **AppKit windows only on the main thread** | the loader and game run on a 16 MiB thread; the main thread runs `CFRunLoopRun()` (not `dispatch_main()`, which ends the main thread) and the GPU library sends the window loop to the main queue |
+| Window surface | a Metal window (`SDL_Metal_CreateView`), Vulkan surface through `VK_EXT_metal_surface` |
+| Rosetta hides AVX in CPUID | `ROSETTA_ADVERTISE_AVX=1` (run.py), before the process starts |
+| shadPS4 forced its own `VK_DRIVER_FILES` | kept only when the caller set none |
+| No sparse binding | dense buffer arenas (as under CrossOver) |
+| glibc extras | `src/compat_mac.{h,c}`, `gpu/shim/sanctuary_mac_compat.h`: timed locks, `clock_nanosleep`, `getrandom`, `RUSAGE_THREAD`, `gettid`, `st_*tim`, sockets; epolls use `poll()` as on Windows |
+
+Checks before the build (a native x86_64 test program under Rosetta): the guest ranges reserve, `shm`
+views alias, `gs:[8*key]` reads the key in two threads, written code runs and can be patched, and a
+protected-page write from a red-zone leaf function arrives as SIGBUS with the right address, `rip` and
+write bit, resumes, and keeps the red zone. A second test program got every malloc in the low
+region, CoreFoundation's and a second thread's included.
+
+Result (native run 4): window, swapchain and presenter, guest threads, a 2 GiB dense arena at
+`0x7000000000`, save data mounted. No STOP or assertion after 5000+ log lines. The process uses
+~210% CPU and a **~6 GB physical footprint** on this 8 GB Mac, which needs a look (likely the guest
+memory pool and the zeroing of released pages).
+
+Not done yet:
+- frame rate, rendering correctness, audio, gamepads and a long session;
+- the footprint;
+- scripting and packaging the KosmicKrisp build and a `.app`;
+- `build.sh --test`'s unit tests on macOS;
+- `--gamepad` mode, which pumps SDL events off the main thread.
+
+Linux and native Windows have not been rebuilt since these changes.
 
 ## Baseline: Windows release under CrossOver (2026-11-24)
 

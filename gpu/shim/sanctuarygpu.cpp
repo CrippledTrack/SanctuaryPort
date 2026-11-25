@@ -1,3 +1,7 @@
+#ifdef __APPLE__
+#include <dispatch/dispatch.h>
+#endif
+#include <functional>
 #include "sanctuary_write_log.h"
 // sanctuary: glue between the C loader and the vendored shadPS4 video core.
 #include "sanctuary_overlay.h"
@@ -233,7 +237,7 @@ extern "C" int sanctuarygpu_init(const SanctuaryGpuConfig* config) {
     Core::Emulator::FillElfInfo(*config);
     const std::string title = config->title ? config->title : "SanctuaryPort";
     const s32 width = config->width, height = config->height;
-    g_window_thread = std::thread([title, width, height] {
+    auto window_loop = [title, width, height] {
         Common::SetCurrentThreadName("sanctuary:window");
         auto* window = new Frontend::WindowSDL(width, height, title.c_str());
         {
@@ -249,8 +253,16 @@ extern "C" int sanctuarygpu_init(const SanctuaryGpuConfig* config) {
         runtime_report();
         std::fflush(stdout);
         std::_Exit(0);
-    });
+    };
+#ifdef __APPLE__
+    // macOS: AppKit windows live on the main thread, whose run loop drains the GCD main queue
+    // (src/probe.c main); the loop then never gives the queue back.
+    dispatch_async_f(dispatch_get_main_queue(), new std::function<void()>(std::move(window_loop)),
+                     [](void* loop) { (*static_cast<std::function<void()>*>(loop))(); });
+#else
+    g_window_thread = std::thread(std::move(window_loop));
     g_window_thread.detach();
+#endif
     {
         std::unique_lock lock{g_window_mutex};
         g_window_cv.wait(lock, [] { return g_window_ready; });

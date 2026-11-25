@@ -17,6 +17,8 @@
 #include <unistd.h>
 #ifdef _WIN32
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <sys/mman.h>
 #else
 #include <sys/syscall.h>
 #include <sys/mman.h>
@@ -97,6 +99,24 @@ static void set_gs(void *base) {
     if (!TlsSetValue(tls_slot,base)) { fprintf(stderr,"STOP: TlsSetValue failed (%lu)\n",GetLastError()); exit(21); }
 }
 #define tls_block_alloc(size) _aligned_malloc(size,64)
+#elif defined(__APPLE__)
+/* macOS x86_64 points gs at the thread's pthread data (TSD), where key k sits at gs:[8*k], and
+ * no process may move gs. The guest TCB lives in a pthread key, and the loader rewrites the
+ * guest's `mov rax, gs:[0]` to that slot (patch_tcb_loads), as on Windows. */
+static pthread_key_t tcb_key;
+static int tcb_key_ready;
+uint32_t runtime_thread_tcb_offset(void) {
+    if (!tcb_key_ready) {
+        if (pthread_key_create(&tcb_key,NULL)) { fputs("STOP: pthread_key_create failed\n",stderr); exit(21); }
+        tcb_key_ready=1;
+    }
+    return 8*(uint32_t)tcb_key;
+}
+static void set_gs(void *base) {
+    runtime_thread_tcb_offset();
+    if (pthread_setspecific(tcb_key,base)) { fputs("STOP: pthread_setspecific failed\n",stderr); exit(21); }
+}
+#define tls_block_alloc(size) aligned_alloc(64,size)
 #else
 static void set_gs(void *base) {
     if (syscall(SYS_arch_prctl,ARCH_SET_GS,(unsigned long)base)) { perror("STOP: arch_prctl(ARCH_SET_GS)"); exit(21); }
@@ -280,7 +300,11 @@ static ABI int32_t attr_set_guard(ThreadAttr **slot,uint64_t size) {
 static void set_host_name(const char *name) {
     char host[16]={0};
     memcpy(host,name,strnlen(name,sizeof(host)-1));
+#ifdef __APPLE__
+    pthread_setname_np(host); /* macOS names only the calling thread */
+#else
     pthread_setname_np(pthread_self(),host);
+#endif
 }
 #ifdef _WIN32
 #define exit_setjmp(t) sanctuary_setjmp((t)->exit_jump)

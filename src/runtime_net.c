@@ -45,7 +45,11 @@ static const char *host_error_text(int e) { static __thread char t[16]; snprintf
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
+#ifdef __APPLE__
+#include <poll.h> /* epolls are emulated with poll(), as on Windows */
+#else
 #include <sys/epoll.h>
+#endif
 #include <sys/socket.h>
 typedef int HostSocket;
 #define host_close close
@@ -607,8 +611,18 @@ static ABI int32_t net_getsockopt(int32_t s, int32_t level, int32_t name, void *
 
 /* ---- Epoll: {u32 events, u32 reserved, u64 ident, u64 data}; IN 1, OUT 2, ERR 8, HUP 0x10 ---- */
 typedef struct { uint32_t events, reserved; uint64_t ident, data; } GuestEpollEvent;
+#if defined(_WIN32) || defined(__APPLE__)
+/* Windows and macOS (no epoll): an epoll is the list of its sockets, waited on with WSAPoll or
+ * poll(). Ids start at 0x4000. */
 #ifdef _WIN32
-/* Windows: an epoll is the list of its sockets, waited on with WSAPoll. Ids start at 0x4000. */
+typedef WSAPOLLFD HostPollFd;
+#define host_poll(fds, n, ms) WSAPoll((fds), (ULONG)(n), (ms))
+#define host_sleep_ms(ms) Sleep((DWORD)(ms))
+#else
+typedef struct pollfd HostPollFd;
+#define host_poll(fds, n, ms) poll((fds), (nfds_t)(n), (ms))
+#define host_sleep_ms(ms) usleep((useconds_t)(ms) * 1000)
+#endif
 #define MAX_EPOLL 64
 #define EPOLL_SOCKETS 64
 #define EPOLL_BASE 0x4000
@@ -661,7 +675,7 @@ static ABI int32_t net_epoll_control(int32_t eid, int32_t op, int32_t id, const 
 }
 static ABI int32_t net_epoll_wait(int32_t eid, GuestEpollEvent *events, int32_t max, int32_t timeout_us) {
     if (!events || max<1) return fail_guest(G_EINVAL);
-    WSAPOLLFD fds[EPOLL_SOCKETS]; uint64_t ident[EPOLL_SOCKETS], data[EPOLL_SOCKETS];
+    HostPollFd fds[EPOLL_SOCKETS]; uint64_t ident[EPOLL_SOCKETS], data[EPOLL_SOCKETS];
     pthread_mutex_lock(&epoll_lock);
     Epoll *e=epoll_get(eid);
     int n=e ? e->count : -1;
@@ -673,8 +687,8 @@ static ABI int32_t net_epoll_wait(int32_t eid, GuestEpollEvent *events, int32_t 
     pthread_mutex_unlock(&epoll_lock);
     if (n<0) return fail_guest(G_EBADF);
     int ms=timeout_us<0 ? -1 : (timeout_us+999)/1000;
-    if (!n) { Sleep(ms<0 ? 10 : (DWORD)ms); return 0; }
-    int ready=WSAPoll(fds,(ULONG)n,ms);
+    if (!n) { host_sleep_ms(ms<0 ? 10 : ms); return 0; }
+    int ready=host_poll(fds,n,ms);
     if (ready<0) return fail(host_error());
     int out=0;
     for (int k=0;k<n && out<max;++k) {

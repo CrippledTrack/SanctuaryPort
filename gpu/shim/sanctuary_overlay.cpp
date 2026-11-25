@@ -38,6 +38,18 @@ asm(".section .rdata,\"dr\"\n"
     ".global sanctuary_font_ttf_end\n"
     "sanctuary_font_ttf_end:\n"
     ".text\n");
+#elif defined(__APPLE__)
+// Mach-O: C symbols carry a leading underscore; read-only data goes to __TEXT,__const.
+asm(".section __TEXT,__const\n"
+    ".p2align 4\n"
+    ".private_extern _sanctuary_font_ttf\n"
+    ".globl _sanctuary_font_ttf\n"
+    "_sanctuary_font_ttf:\n"
+    ".incbin \"" SANCTUARY_FONT_PATH "\"\n"
+    ".private_extern _sanctuary_font_ttf_end\n"
+    ".globl _sanctuary_font_ttf_end\n"
+    "_sanctuary_font_ttf_end:\n"
+    ".text\n");
 #else
 asm(".section .rodata\n"
     ".balign 16\n"

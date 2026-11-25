@@ -2,6 +2,9 @@
 #define SANCTUARY_RUNTIME_H
 #include <stdint.h>
 #include <stddef.h>
+#ifdef __APPLE__
+#include "compat_mac.h"
+#endif
 #ifdef _WIN32
 #include "compat_win.h"
 /* No signals on Windows: the exception handler resumes the thread in sanctuary_longjmp
@@ -77,6 +80,8 @@ void *runtime_low_map(size_t size, int prot);
 void runtime_memory_reserve(void);
 /* MACOS-TEMP: Windows build running under Wine on a macOS host (docs/macos.md). */
 int runtime_wine_on_macos(void);
+/* macOS host: native build (__APPLE__) or, MACOS-TEMP, the Windows build under Wine. */
+int runtime_macos_host(void);
 uintptr_t runtime_ajm_resolve(const char *name);
 void runtime_ajm_report(void);
 /* AjmDecMp3ParseFrame (guest layout). */

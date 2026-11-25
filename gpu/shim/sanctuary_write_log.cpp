@@ -10,7 +10,7 @@
 #include <windows.h>
 #undef near
 #else
-#include <ucontext.h>
+#include "../../src/host_ucontext.h" // Linux gregs or the macOS thread state, by REG_* index
 #include <unistd.h>
 #endif
 #include <x86intrin.h>
@@ -94,8 +94,8 @@ extern "C" void sanctuarygpu_dump_guest_writes(void* ucontext) {
     const CONTEXT* c = static_cast<const EXCEPTION_POINTERS*>(ucontext)->ContextRecord;
     const std::uint64_t regs[] = {c->Rax, c->Rbx, c->Rcx, c->Rdx, c->Rsi, c->Rdi, c->R14, c->R15};
 #else
-    const auto* uc = static_cast<const ucontext_t*>(ucontext);
-    const auto* g = uc->uc_mcontext.gregs;
+    auto* uc = static_cast<ucontext_t*>(ucontext);
+    const auto* g = HOST_GREGS(uc);
     const std::uint64_t regs[] = {std::uint64_t(g[REG_RAX]), std::uint64_t(g[REG_RBX]),
                                   std::uint64_t(g[REG_RCX]), std::uint64_t(g[REG_RDX]),
                                   std::uint64_t(g[REG_RSI]), std::uint64_t(g[REG_RDI]),

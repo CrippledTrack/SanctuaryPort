@@ -63,7 +63,7 @@ endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(XXHASH REQUIRED IMPORTED_TARGET libxxhash)
 pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3)
-if (NOT WIN32)
+if (NOT WIN32 AND NOT APPLE)
     pkg_check_modules(X11 REQUIRED IMPORTED_TARGET x11)
 endif()
 find_package(miniz QUIET)
@@ -156,8 +156,9 @@ file(GLOB AVPLAYER CONFIGURE_DEPENDS shadps4/core/libraries/avplayer/*.cpp)
 pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil libswscale libswresample)
 file(GLOB SHIM_SOURCES CONFIGURE_DEPENDS shim/*.cpp shim/*/*.cpp)
 # Windows: a DLL cannot leave the runtime_* symbols for sanctuary-probe.exe to resolve, so the
-# library is static there and linked into the executable.
-if (WIN32)
+# library is static there and linked into the executable. macOS (x86_64, under Rosetta 2) does the
+# same: a Mach-O dylib cannot leave them undefined for the executable either.
+if (WIN32 OR APPLE)
     set(SANCTUARYGPU_KIND STATIC)
 else()
     set(SANCTUARYGPU_KIND SHARED)
@@ -198,7 +199,7 @@ target_include_directories(sanctuarygpu PRIVATE shim shadps4 ${SHADER_INCLUDE} t
 target_compile_definitions(sanctuarygpu PRIVATE BOOST_ASIO_STANDALONE NDEBUG)
 target_compile_options(sanctuarygpu PRIVATE -Wno-deprecated-declarations -Wno-missing-field-initializers)
 # Runtime symbols (runtime_memory_*, runtime_process_*) resolve against sanctuary-probe.
-if (NOT WIN32)
+if (NOT WIN32 AND NOT APPLE)
     target_link_options(sanctuarygpu PRIVATE -Wl,--allow-shlib-undefined)
 endif()
 target_link_libraries(sanctuarygpu PRIVATE ffx-vulkan::portable ffx-vulkan::fsr4-v07-vulkan)
@@ -211,6 +212,12 @@ if (WIN32)
     target_compile_definitions(sanctuarygpu PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
     target_compile_options(sanctuarygpu PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/shim/sanctuary_win_compat.h)
     target_link_libraries(sanctuarygpu PUBLIC Vulkan::Vulkan ws2_32 bcrypt ntdll synchronization winmm pdh)
+elseif (APPLE)
+    target_compile_options(sanctuarygpu PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/shim/sanctuary_mac_compat.h)
+    # The Vulkan loader (packaging/macos/deps.sh) picks the driver: KosmicKrisp through
+    # VK_DRIVER_FILES (docs/macos.md). SDL gives the window a CAMetalLayer.
+    target_link_libraries(sanctuarygpu PUBLIC Vulkan::Vulkan "-framework Metal" "-framework QuartzCore"
+        "-framework AppKit" "-framework IOKit" "-framework CoreFoundation")
 else()
     target_link_libraries(sanctuarygpu PUBLIC PkgConfig::X11)
 endif()
@@ -293,6 +300,39 @@ if (WIN32)
     add_executable(sanctuary-play WIN32 ../packaging/windows/play.c ../packaging/windows/play.rc)
     target_compile_options(sanctuary-play PRIVATE -municode)
     target_link_options(sanctuary-play PRIVATE -municode)
+endif()
+
+# sanctuary (macOS, x86_64 under Rosetta 2): sanctuarygpu is static, as on Windows, so the loader and
+# the HLE runtime are linked here. packaging/macos/build.sh configures this; docs/macos.md.
+if (APPLE)
+    find_file(SANCTUARY_MIMALLOC_OBJECT mimalloc.o PATHS ${CMAKE_PREFIX_PATH} PATH_SUFFIXES lib REQUIRED
+        NO_DEFAULT_PATH)
+    file(GLOB SANCTUARY_RUNTIME CONFIGURE_DEPENDS ../src/runtime*.c)
+    file(GLOB SANCTUARY_ATRAC9 CONFIGURE_DEPENDS ../third_party/LibAtrac9/C/src/*.c)
+    file(GLOB SANCTUARY_NGS2 CONFIGURE_DEPENDS ../src/ngs2/*.cpp)
+    add_library(atrac9 STATIC ${SANCTUARY_ATRAC9})
+    target_compile_options(atrac9 PRIVATE -w)
+    set_target_properties(atrac9 PROPERTIES C_STANDARD 99 INTERPROCEDURAL_OPTIMIZATION OFF)
+    # macos_heap.c and mimalloc.o: the process heap below 1 TiB (the guest packs pointers in 40 bits).
+    add_executable(sanctuary-probe ../src/probe.c ${SANCTUARY_RUNTIME} ../src/compat_mac.c ../src/macos_heap.c
+        ../src/cpu_check.c ../src/vulkan_smoke.c ../src/isa_rewrite.c ../src/isa_emulate.c ${SANCTUARY_NGS2}
+        ${SANCTUARY_MIMALLOC_OBJECT})
+    set_source_files_properties(${SANCTUARY_NGS2} PROPERTIES COMPILE_OPTIONS "-std=c++20")
+    set_source_files_properties(${SANCTUARY_NGS2} PROPERTIES INCLUDE_DIRECTORIES
+        "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/LibAtrac9/C/src")
+    # isa_emulate runs inside guest code: no XMM/YMM.
+    set_source_files_properties(../src/isa_emulate.c PROPERTIES COMPILE_OPTIONS "-mgeneral-regs-only")
+    set_target_properties(sanctuary-probe PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)
+    target_compile_options(sanctuary-probe PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror>)
+    target_include_directories(sanctuary-probe PRIVATE .. ../src third_party/xbyak)
+    target_link_libraries(sanctuary-probe PRIVATE sanctuarygpu atrac9 Zydis::Zydis -pthread)
+    # The guest main thread runs on the process stack: 16 MiB. The libraries sit next to it (@rpath).
+    target_link_options(sanctuary-probe PRIVATE -Wl,-stack_size,0x1000000
+        "-Wl,-rpath,@executable_path/../lib" "-Wl,-rpath,@executable_path")
+    add_executable(sanctuary-gpu-capabilities ../tools/gpu_capabilities.c)
+    target_include_directories(sanctuary-gpu-capabilities PRIVATE shadps4)
+    target_link_libraries(sanctuary-gpu-capabilities PRIVATE Vulkan::Vulkan)
+    target_link_options(sanctuary-gpu-capabilities PRIVATE "-Wl,-rpath,@executable_path/../lib")
 endif()
 
 # Explicit test targets; neither launches the game nor needs a Vulkan device.

@@ -169,6 +169,8 @@ static ABI int32_t get_cpumode(void) { return 0; }        /* SCE_KERNEL_CPUMODE_
 static ABI int32_t thread_id(void) {
 #ifdef _WIN32
     return (int32_t)GetCurrentThreadId();
+#elif defined(__APPLE__) /* Darwin's SYS_gettid is a different call */
+    return (int32_t)gettid();
 #else
     return (int32_t)syscall(SYS_gettid);
 #endif

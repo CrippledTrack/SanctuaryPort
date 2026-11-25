@@ -20,16 +20,27 @@
 #include <tlhelp32.h>
 #else
 #include <sys/mman.h>
+#ifndef __APPLE__
 #include <malloc.h>
+#endif
 #include <unistd.h>
 #include <signal.h>
-#include <ucontext.h>
+#include "host_ucontext.h"
 #include <fcntl.h>
 #include <dlfcn.h>
 #include <execinfo.h>
-#include <sys/syscall.h>
 #include <sys/uio.h>
+#ifdef __APPLE__
+#include <pthread.h>
+#include <CoreFoundation/CoreFoundation.h>
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#undef round_page /* mach's macro; the probe has its own */
+#undef trunc_page
+#else
+#include <sys/syscall.h>
 #include <sys/prctl.h>
+#endif
 #endif
 
 typedef struct { uint64_t address, size, flags; } Segment;
@@ -93,7 +104,7 @@ static ABI __attribute__((noreturn)) void unresolved(uint32_t id, uintptr_t argu
     uintptr_t caller=(uintptr_t)__builtin_return_address(0)-(uintptr_t)image;
     for (uint64_t m=0;m<module_count;++m)
         if (caller>=modules[m].base && caller-modules[m].base<modules[m].size)
-            printf("Caller in linked module %" PRIu64 " (%s): +0x%" PRIxPTR "\n",m,m==0 ? "libc.prx" : "system module",caller-modules[m].base);
+            printf("Caller in linked module %" PRIu64 " (%s): +0x%" PRIxPTR "\n",m,m==0 ? "libc.prx" : "system module",(uintptr_t)(caller-modules[m].base));
     runtime_report();
     puts(entered_game ? "Original guest entry instructions executed; game initialization is incomplete." :
                         "Native libc initialization is incomplete; game entry has not run.");
@@ -103,7 +114,12 @@ static ABI __attribute__((noreturn)) void unresolved(uint32_t id, uintptr_t argu
 #ifndef _WIN32
 /* enter_on_stack(entry, arg0, arg1, stack_top): call entry(arg0,arg1) on a new stack. */
 void enter_on_stack(void *entry, void *arg0, void *arg1, void *top);
-__asm__(".text\n.globl enter_on_stack\nenter_on_stack:\n"
+#ifdef __APPLE__
+#define ASM_SYMBOL(name) "_" #name /* Mach-O: C symbols carry a leading underscore */
+#else
+#define ASM_SYMBOL(name) #name
+#endif
+__asm__(".text\n.globl " ASM_SYMBOL(enter_on_stack) "\n" ASM_SYMBOL(enter_on_stack) ":\n"
         " push %rbp\n mov %rsp,%rbp\n and $-16,%rcx\n mov %rcx,%rsp\n"
         " mov %rdi,%rax\n mov %rsi,%rdi\n mov %rdx,%rsi\n call *%rax\n"
         " mov %rbp,%rsp\n pop %rbp\n ret\n");
@@ -342,8 +358,11 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
     return EXCEPTION_CONTINUE_SEARCH;
 }
 static LONG WINAPI unhandled_fault(EXCEPTION_POINTERS *info) { return fatal_exception(info); }
+#endif
+#if defined(_WIN32) || defined(__APPLE__)
 /* Guest code reads its TCB with `mov rax, gs:[0]` (link_*.py rewrote fs:[0]); on Windows
- * the displacement becomes the TEB TLS slot that holds the guest TCB (runtime_thread.c). */
+ * the displacement becomes the TEB TLS slot that holds the guest TCB, on macOS the pthread key
+ * slot (gs:[8*key]) that does (runtime_thread.c). */
 uint32_t runtime_thread_tcb_offset(void);
 static uint64_t patch_tcb_loads(const Segment *segments, uint64_t count) {
     static const unsigned char load[]={0x65,0x48,0x8b,0x04,0x25,0,0,0,0};
@@ -476,12 +495,12 @@ static void call_trace_report(void) {
 #endif
 static void fault(int sig, siginfo_t *info, void *context) {
 #ifndef _WIN32
-    if (sig == SIGTRAP && call_trace_count && call_trace_trap(((ucontext_t *)context)->uc_mcontext.gregs)) return;
-    if (sig == SIGTRAP && point_count && point_trap(((ucontext_t *)context)->uc_mcontext.gregs)) return;
+    if (sig == SIGTRAP && call_trace_count && call_trace_trap(HOST_GREGS((ucontext_t *)context))) return;
+    if (sig == SIGTRAP && point_count && point_trap(HOST_GREGS((ucontext_t *)context))) return;
 #endif
     if (sig == SIGTRAP && isa_table) {
         /* An int3 ISA site (RIP is past the CC byte); any other trap ends in the report below. */
-        greg_t *g = ((ucontext_t *)context)->uc_mcontext.gregs;
+        greg_t *g = HOST_GREGS((ucontext_t *)context);
         IsaRegs regs;
         uintptr_t rip;
         for (int i = 0; i < 16; ++i) regs.gpr[i] = (uint64_t)g[isa_gregs[i]];
@@ -494,7 +513,8 @@ static void fault(int sig, siginfo_t *info, void *context) {
         }
     }
     /* GPU page tracking (write-protected guest pages) is resolved first. */
-    if (gpu_enabled && sig == SIGSEGV && sanctuarygpu_handle_fault(context, info->si_addr)) return;
+    /* macOS reports write faults on protected pages as SIGBUS, Linux as SIGSEGV. */
+    if (gpu_enabled && (sig == SIGSEGV || sig == SIGBUS) && sanctuarygpu_handle_fault(context, info->si_addr)) return;
     /* A speculative guest memory read (runtime_memory.c) failed: resume its recovery point. */
     if ((sig == SIGSEGV || sig == SIGBUS) && runtime_fault_recover) {
         sigjmp_buf *recover = runtime_fault_recover;
@@ -507,7 +527,7 @@ static void fault(int sig, siginfo_t *info, void *context) {
     }
     /* The process is terminating: dladdr/snprintf are acceptable here. */
     ucontext_t *uc = context;
-    uintptr_t rip = (uintptr_t)uc->uc_mcontext.gregs[REG_RIP];
+    uintptr_t rip = (uintptr_t)HOST_GREGS(uc)[REG_RIP];
     char line[512];
     Dl_info where;
     int site = isa_table ? isa_rewrite_site_of_stub(isa_table, rip) : -1;
@@ -532,7 +552,9 @@ static void fault(int sig, siginfo_t *info, void *context) {
     /* SANCTUARY_FAULT_WAIT=1 (development): keep the process stopped so a debugger can attach. */
     { const char *w = getenv("SANCTUARY_FAULT_WAIT");
       if (w && w[0] == '1') {
+#ifndef __APPLE__ /* Yama ptrace scope: Linux only */
           prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
+#endif
           snprintf(line, sizeof(line), "Fault wait: attach with gdb -p %d\n", (int)getpid());
           { ssize_t w_=write(2, line, strlen(line)); (void)w_; }
           for (;;) pause();
@@ -563,18 +585,24 @@ static void write_hex(char *out, uint64_t v) {
 }
 static void dump_frames(ucontext_t *uc) {
     char line[] = "  tid=0000000000000000 rip=0000000000000000 image-relative=0000000000000000 host-relative=0000000000000000\n";
-    uintptr_t rip=(uintptr_t)uc->uc_mcontext.gregs[REG_RIP], rbp=(uintptr_t)uc->uc_mcontext.gregs[REG_RBP];
+    uintptr_t rip=(uintptr_t)HOST_GREGS(uc)[REG_RIP], rbp=(uintptr_t)HOST_GREGS(uc)[REG_RBP];
     uint64_t tid=(uint64_t)gettid();
     /* First argument register: the lock address when a thread waits on a futex. */
     char arg[]="  tid=0000000000000000 rdi=0000000000000000\n";
-    write_hex(arg+6,tid); write_hex(arg+27,(uint64_t)uc->uc_mcontext.gregs[REG_RDI]);
+    write_hex(arg+6,tid); write_hex(arg+27,(uint64_t)HOST_GREGS(uc)[REG_RDI]);
     { ssize_t written_=write(2,arg,sizeof(arg)-1); (void)written_; }
     for (int depth=0; depth<24; ++depth) {
         write_hex(line+6,tid); write_hex(line+27,rip); write_hex(line+59,rip-(uintptr_t)image); write_hex(line+90,rip-exe_base);
         { ssize_t written_=write(2,line,sizeof(line)-1); (void)written_; }
         uintptr_t frame[2];
         struct iovec local={frame,sizeof(frame)}, remote={(void *)rbp,sizeof(frame)};
+#ifdef __APPLE__ /* reads that fail instead of faulting: vm_read_overwrite */
+        (void)local; (void)remote;
+        mach_vm_size_t got=0;
+        if (!rbp || mach_vm_read_overwrite(mach_task_self(),(mach_vm_address_t)rbp,sizeof(frame),(mach_vm_address_t)frame,&got)!=KERN_SUCCESS || got!=sizeof(frame)) break;
+#else
         if (!rbp || process_vm_readv(getpid(),&local,1,&remote,1,0)!=(ssize_t)sizeof(frame)) break;
+#endif
         if (frame[0]<=rbp) break;
         rbp=frame[0]; rip=frame[1];
     }
@@ -585,6 +613,7 @@ static void watchdog(int sig, siginfo_t *info, void *context) {
     const char head[]="STOP: watchdog timeout; thread stacks:\n";
     { ssize_t written_=write(2,head,sizeof(head)-1); (void)written_; }
     dump_frames(context);
+#ifndef __APPLE__ /* macOS: only the watchdog thread's stack (no /proc to list the others) */
     int dir=open("/proc/self/task",O_RDONLY|O_DIRECTORY);
     char buffer[4096];
     long n;
@@ -596,6 +625,7 @@ static void watchdog(int sig, siginfo_t *info, void *context) {
             if (tid>0 && tid!=self) { syscall(SYS_tgkill,getpid(),tid,SIGUSR2); usleep(20000); }
             at+=d->reclen;
         }
+#endif
     usleep(100000);
     _exit(128 + sig);
 }
@@ -689,7 +719,11 @@ void runtime_restart(void) {
     TerminateProcess(GetCurrentProcess(),0);
 #else
     const char *command = getenv("SANCTUARY_RESTART_COMMAND");
+#ifdef __APPLE__
+    for (int fd = 3, max = getdtablesize(); fd < max; ++fd) close(fd);
+#else
     syscall(SYS_close_range, 3u, ~0u, 0u);
+#endif
     if (command && *command) {
         puts("Runtime: restarting through SANCTUARY_RESTART_COMMAND");
         execl("/bin/sh", "sh", "-c", command, (char *)NULL);
@@ -719,15 +753,45 @@ static int cpu_supported(char *missing, size_t size) {
     return 1;
 }
 
+#ifdef __APPLE__
+/* macOS: AppKit windows and their events belong to the process's main thread. The main thread
+ * only runs its run loop, which drains the GCD main queue where the GPU library sends the window
+ * loop (gpu/shim/sanctuarygpu.cpp); the loader and the game run on a thread of their own, with
+ * the 16 MiB stack the main thread has elsewhere. Not dispatch_main(): it ends the main thread
+ * and a worker thread then drains the queue, which AppKit refuses. */
+static int probe_main(int argc, char **argv);
+static int probe_argc;
+static char **probe_argv;
+static void *probe_main_thread(void *unused) {
+    (void)unused;
+    exit(probe_main(probe_argc, probe_argv));
+}
 int main(int argc, char **argv) {
+    probe_argc = argc; probe_argv = argv;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 16u << 20);
+    pthread_t thread;
+    if (pthread_create(&thread, &attr, probe_main_thread, NULL)) { perror("STOP: pthread_create"); return 21; }
+    for (;;) CFRunLoopRun();
+}
+static int probe_main(int argc, char **argv) {
+#else
+int main(int argc, char **argv) {
+#endif
 #ifndef _WIN32
     /* SANCTUARY_DEBUGGABLE=1 (development): any process of this user may read this one's memory
      * (tools that inspect the game's data while it runs). */
     { const char *d = getenv("SANCTUARY_DEBUGGABLE");
-      if (d && d[0] == '1') prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0); }
+#ifndef __APPLE__
+      if (d && d[0] == '1') prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
+#else
+      (void)d;
+#endif
+    }
 #endif
     setvbuf(stdout, NULL, _IONBF, 0);
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__APPLE__) /* macOS: TODO, see docs/macos.md (native build) */
     /* Keep host heap objects handed to the guest (thread handles, TLS) in the
        non-PIE brk heap, i.e. below 1 TiB: the guest packs pointers into 40 bits. */
     mallopt(M_ARENA_MAX,1);
@@ -746,9 +810,10 @@ int main(int argc, char **argv) {
         runtime_pad_describe();
         return 0;
     }
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
     /* The PS4 user range must stay free of host allocations (GPU driver, heaps), and the guest
-     * TCB needs one of the 64 TEB TLS slots before DLLs (Vulkan drivers) take them. */
+     * TCB needs one of the 64 TEB TLS slots before DLLs (Vulkan drivers) take them (macOS: a
+     * pthread key, read the same way through gs). */
     runtime_memory_reserve();
     runtime_thread_tcb_offset();
 #endif
@@ -1020,6 +1085,9 @@ int main(int argc, char **argv) {
         _exit(missing ? 1 : 0); /* no destructors: GPU threads are running */
     }
     if (patch_file) apply_patches(patch_file, segments, ns, relocs, nr);
+#ifdef __APPLE__
+    printf("Guest TCB loads redirected to the pthread key slot: %" PRIu64 "\n", patch_tcb_loads(segments, ns));
+#endif
 #ifdef _WIN32
     printf("Guest TCB loads redirected to the TEB TLS slot: %" PRIu64 "\n", patch_tcb_loads(segments, ns));
     /* Windows writes exception records into the SysV red zone: faultable accesses of the game's
@@ -1093,4 +1161,7 @@ int main(int argc, char **argv) {
     enter_on_stack(image+entry,&params,(void *)guest_exit,stack+MAIN_STACK-64);
 #endif
     fail("entry unexpectedly returned");
+#ifdef __APPLE__
+    return 1; /* probe_main is not main: no implicit return (fail exits) */
+#endif
 }
