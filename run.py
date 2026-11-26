@@ -230,7 +230,15 @@ def main():
         # Rosetta 2 runs AVX/AVX2 code but only reports them in CPUID when asked to; the game's code
         # needs AVX. It must be set before the probe starts (Rosetta reads it at launch).
         env.setdefault('ROSETTA_ADVERTISE_AVX', '1')
-        # The x86_64 KosmicKrisp build (docs/macos.md) as the Vulkan driver, when given.
+        # The x86_64 KosmicKrisp build (docs/macos.md) as the Vulkan driver: the one given, else
+        # the one next to the probe (kosmickrisp/ in bin/ or out/macos/), so the launcher's PLAY
+        # needs no variables.
+        if not env.get('SANCTUARY_KOSMICKRISP_ICD'):
+            for place in (PORT / 'bin', PORT / 'out' / 'macos'):
+                icd = place / 'kosmickrisp' / 'kosmickrisp_icd.x86_64.json'
+                if icd.is_file():
+                    env['SANCTUARY_KOSMICKRISP_ICD'] = str(icd)
+                    break
         if env.get('SANCTUARY_KOSMICKRISP_ICD') and not env.get('VK_DRIVER_FILES'):
             env['VK_DRIVER_FILES'] = env['SANCTUARY_KOSMICKRISP_ICD']
     # Values this script derived on the previous start ("Apply and restart" inherits them) are

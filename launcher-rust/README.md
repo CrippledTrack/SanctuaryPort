@@ -12,7 +12,11 @@ Install Rust with [rustup](https://rustup.rs). `rust-toolchain.toml` pins the to
 
 ## macOS
 
-On macOS you can build and run the launcher, but not the game: `main` doesn't build the game's runtime for macOS yet, so PLAY doesn't start anything.
+On macOS the launcher (native) starts the game's x86_64 macOS build, which runs under Rosetta 2
+(`docs/macos.md`). Build the game first: `packaging/macos/deps.sh`, then `packaging/macos/build.sh`
+(into `out/macos`), plus the x86_64 KosmicKrisp Vulkan driver in `out/macos/kosmickrisp/`
+(`docs/macos.md`, not scripted yet). PLAY runs `bash run.sh`, which rebuilds `out/macos` when
+sources changed and gives the game that driver; the GPU and display lists use it too.
 
 1. Install the Xcode Command Line Tools if they are missing: `xcode-select --install`.
 2. Install Rust with [rustup](https://rustup.rs). Use the official installer rather than Homebrew's `rustup`, which puts `cargo` outside your `PATH`:
@@ -71,7 +75,7 @@ CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc cargo build --r
 - `SANCTUARY_RELEASE_TAG`: read at build time, not at run time: the release tag the binary is
   (for example `v0.1.0`). Without it the binary is the version of `Cargo.toml`.
 
-PLAY runs `bash run.sh` on Linux and `python\python.exe -u run.py` on Windows
+PLAY runs `bash run.sh` on Linux and macOS and `python\python.exe -u run.py` on Windows
 (`src/core/launch.rs`, `port_command`); `--play` does the same without the window.
 `--play --game <folder> [--update <folder>]` names the dump for that start only, without saving it
 (another launcher can pass the player's copy this way).

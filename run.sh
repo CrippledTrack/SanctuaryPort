@@ -16,7 +16,22 @@ fi
 # SANCTUARY_DATA_DIR: writable directory for the generated files (out/), saves (user/) and sanctuary.ini;
 # by default this directory. The preparation itself is in run.py.
 data=${SANCTUARY_DATA_DIR:-.}
-if [[ -z ${SANCTUARY_PREBUILT:-} && -z ${SANCTUARY_IN_NIX_SHELL:-} ]] && ! { command -v pkg-config >/dev/null && pkg-config --exists vulkan sdl3; } && command -v nix-shell >/dev/null; then
+macos=; [[ $(uname -s) == Darwin ]] && macos=1
+# macOS: Homebrew and the user's tools (the launcher starts this without a login shell's PATH).
+if [[ -n $macos ]]; then
+    for dir in /opt/homebrew/bin /usr/local/bin; do
+        [[ -d $dir && ":$PATH:" != *":$dir:"* ]] && PATH=$dir:$PATH
+    done
+    export PATH
+    # The game's runtime is x86_64: without Rosetta 2 it cannot start, and a program the launcher
+    # starts gets no install offer from macOS.
+    if [[ $(uname -m) == arm64 ]] && ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+        echo 'Rosetta 2 is not installed; the game needs it. Install it with:' >&2
+        echo '  softwareupdate --install-rosetta --agree-to-license' >&2
+        exit 1
+    fi
+fi
+if [[ -z $macos && -z ${SANCTUARY_PREBUILT:-} && -z ${SANCTUARY_IN_NIX_SHELL:-} ]] && ! { command -v pkg-config >/dev/null && pkg-config --exists vulkan sdl3; } && command -v nix-shell >/dev/null; then
     args=''; if (( $# )); then args=$(printf '%q ' "$@"); fi
     exec env SANCTUARY_IN_NIX_SHELL=1 nix-shell shell.nix --run "bash run.sh $args"
 fi
@@ -33,6 +48,9 @@ if [[ -z ${PYTHON:-} ]]; then echo 'Install Python 3 or set PYTHON.' >&2; exit 1
 if [[ -z ${SANCTUARY_PREBUILT:-} && -d fsr4_shaders ]] && command -v spirv-cross >/dev/null; then
     bash tools/fsr4_optimize.sh || echo 'FSR 4: optimized post passes not built' >&2
 fi
-if [[ -z ${SANCTUARY_PREBUILT:-} ]]; then bash build.sh; fi
+if [[ -z ${SANCTUARY_PREBUILT:-} ]]; then
+    # macOS: the x86_64 build under Rosetta 2 (docs/macos.md); out/macos once built.
+    if [[ -n $macos ]]; then bash packaging/macos/build.sh; else bash build.sh; fi
+fi
 export SANCTUARY_DATA_DIR=$data
 exec "$PYTHON" run.py "$@"

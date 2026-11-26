@@ -287,6 +287,15 @@ pub(crate) fn lock(user: &Path) -> io::Result<File> {
         .create(true)
         .truncate(false)
         .open(path)?;
+    // A lock just released can stay held for a moment: a child process the launcher is starting
+    // (fork, then exec) holds a copy of every open file, this one too, until its exec closes it
+    // (macOS; a parallel test run hit it). Retry for up to a second before giving up.
+    for _ in 0..50 {
+        if file.try_lock_exclusive().is_ok() {
+            return Ok(file);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     file.try_lock_exclusive()
         .map_err(|_| invalid("Another save backup or restore is in progress"))?;
     Ok(file)

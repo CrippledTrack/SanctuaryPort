@@ -130,7 +130,8 @@ pub fn list_gpus(tools: &dyn Tools, paths: &Paths) -> Vec<GpuRow> {
     let Some(tool) = paths.find_tool("sanctuary-gpu-capabilities") else {
         return Vec::new();
     };
-    run(tools, tool, &["--list"], None, Duration::from_secs(5), true)
+    let env = macos_driver_env(&tool, &|key| std::env::var(key).ok());
+    run(tools, tool, &["--list"], env.as_ref(), Duration::from_secs(5), true)
         .map(|out| parse_gpu_list(&out))
         .unwrap_or_default()
 }
@@ -215,6 +216,9 @@ pub fn monitor_selection(displays: &[Display], saved: &str) -> String {
 /// `run.py`: a development build loads the MSYS2 CLANG64 DLLs (SDL3, FFmpeg); without them Windows
 /// would show a missing-DLL dialog, so the probe is not run at all.
 pub fn probe_env(probe: &Path, env: Lookup) -> Option<Option<IndexMap<String, String>>> {
+    if cfg!(target_os = "macos") {
+        return Some(macos_driver_env(probe, env));
+    }
     if !cfg!(windows) || probe.parent()?.join("SDL3.dll").is_file() {
         return Some(None);
     }
@@ -229,6 +233,26 @@ pub fn probe_env(probe: &Path, env: Lookup) -> Option<Option<IndexMap<String, St
     }
     let path = std::env::join_paths(dirs).ok()?.into_string().ok()?;
     Some(Some(inherited_env_with(&[("PATH", path)])))
+}
+
+/// macOS: the tools are x86_64 (under Rosetta 2) and need the x86_64 KosmicKrisp Vulkan driver
+/// built next to them (`kosmickrisp/`), as `run.py` gives the game; `None` (the launcher's own
+/// environment) without it, or when `VK_DRIVER_FILES` is already set.
+fn macos_driver_env(tool: &Path, env: Lookup) -> Option<IndexMap<String, String>> {
+    if !cfg!(target_os = "macos") || env("VK_DRIVER_FILES").is_some() {
+        return None;
+    }
+    let icd = tool
+        .parent()?
+        .join("kosmickrisp")
+        .join("kosmickrisp_icd.x86_64.json");
+    if !icd.is_file() {
+        return None;
+    }
+    Some(inherited_env_with(&[(
+        "VK_DRIVER_FILES",
+        icd.to_string_lossy().into_owned(),
+    )]))
 }
 
 /// The monitors the game can open on, in the order `sanctuary-probe --displays` numbers them, or

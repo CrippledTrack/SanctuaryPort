@@ -60,6 +60,21 @@ Not done yet:
 
 Linux and native Windows have not been rebuilt since these changes.
 
+## SanctuaryPort.app (experimental)
+
+`bash packaging/macos/app.sh` (Apple silicon, after `packaging/macos/build.sh`) builds
+`dist/SanctuaryPort.app`: the launcher native arm64, the game's runtime x86_64 under Rosetta 2, and
+inside the app the runtime's dylibs, the x86_64 KosmicKrisp driver (from `out/macos/kosmickrisp` or
+`SANCTUARY_KOSMICKRISP_DIR`, with an ICD file that names it relative to itself) and Python 3.12
+(python-build-standalone, arm64) with Pillow. Saves, `sanctuary.ini` and the prepared game go to
+`~/Library/Application Support/SanctuaryPort`. The launcher from a source checkout also starts the
+game (PLAY runs `run.sh`, which builds `out/macos` and gives the game the driver next to it).
+
+Experimental: tested on one Mac (A18 Pro, macOS 27.2); the app needs the macOS version KosmicKrisp
+was built for (27.2 with the current build, not yet scripted); it is signed ad hoc, so a downloaded
+copy needs `xattr -dr com.apple.quarantine SanctuaryPort.app`; Rosetta 2 must be installed
+(`run.sh` says how when it is missing).
+
 ## Memory footprint
 
 Measured with `footprint -p` and `vmmap -v` on the running process, after ~2 minutes (intro and

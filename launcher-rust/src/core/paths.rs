@@ -125,7 +125,13 @@ impl Paths {
         } else {
             name.to_string()
         };
-        ["bin", "out"]
+        // macOS: packaging/macos/build.sh builds into out/macos.
+        let folders: &[&str] = if cfg!(target_os = "macos") {
+            &["bin", "out/macos", "out"]
+        } else {
+            &["bin", "out"]
+        };
+        folders
             .iter()
             .map(|folder| self.port_dir.join(folder).join(&file))
             .find(|candidate| candidate.is_file())
