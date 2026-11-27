@@ -10,7 +10,9 @@
 #                                         view): out/macos-launcher-deps from deps.sh
 #   Contents/Resources/port/              the port folder (SANCTUARY_PORT_DIR): run.sh, run.py,
 #                                         scripts, patches, launcher, assets,
-#       bin/                              sanctuary-probe, sanctuary-gpu-capabilities (x86_64)
+#       bin/                              sanctuary-probe, sanctuary-gpu-capabilities (x86_64);
+#                                         sanctuary-probe links into SanctuaryPort Game.app, the
+#                                         game's own bundle (so Game Mode applies)
 #       bin/kosmickrisp/                  the x86_64 KosmicKrisp Vulkan driver, its ICD file and
 #                                         licence (out/macos/kosmickrisp or SANCTUARY_KOSMICKRISP_DIR)
 #       lib/                              SDL3, FFmpeg and the Vulkan loader (x86_64)
@@ -183,10 +185,45 @@ cat > "$contents/Info.plist" <<EOF
 </plist>
 EOF
 
-# Ad-hoc signatures, inside out: every Mach-O file, then the app.
+# The game in a bundle of its own, so macOS knows it is a game: Game Mode (top CPU/GPU priority,
+# fewer background tasks, faster Bluetooth controller polling) applies only to an app it can
+# identify; a bare executable runs as an anonymous process that gamepolicyd skips. bin/sanctuary-probe
+# stays a path that run.py and the launcher start: a link to the bundle's executable, which the
+# kernel follows, so the running process is the bundle's. Its dylibs: @executable_path/../lib
+# (the link's folder) or @executable_path/../../../../lib (the bundle's).
+game="$port/bin/SanctuaryPort Game.app"
+rm -rf "$game"
+mkdir -p "$game/Contents/MacOS" "$game/Contents/Resources"
+mv "$port/bin/sanctuary-probe" "$game/Contents/MacOS/sanctuary-probe"
+install_name_tool -add_rpath @executable_path/../../../../lib "$game/Contents/MacOS/sanctuary-probe"
+ln -s "SanctuaryPort Game.app/Contents/MacOS/sanctuary-probe" "$port/bin/sanctuary-probe"
+cp "$contents/Resources/SanctuaryPort.icns" "$game/Contents/Resources/"
+cat > "$game/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key><string>SanctuaryPort</string>
+    <key>CFBundleDisplayName</key><string>SanctuaryPort</string>
+    <key>CFBundleIdentifier</key><string>io.github.cadugimenes.sanctuaryport.game</string>
+    <key>CFBundleVersion</key><string>$version</string>
+    <key>CFBundleShortVersionString</key><string>$version</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleExecutable</key><string>sanctuary-probe</string>
+    <key>CFBundleIconFile</key><string>SanctuaryPort</string>
+    <key>LSMinimumSystemVersion</key><string>${minos:-14.0}</string>
+    <key>LSApplicationCategoryType</key><string>public.app-category.role-playing-games</string>
+    <key>LSSupportsGameMode</key><true/>
+    <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+EOF
+
+# Ad-hoc signatures, inside out: every Mach-O file, the game's bundle, then the app.
 while IFS= read -r -d '' f; do
     if file -b "$f" | grep -q Mach-O; then codesign --force --sign - "$f" 2>/dev/null; fi
 done < <(find "$contents/Resources" "$contents/Frameworks" "$contents/MacOS" -type f -print0)
+codesign --force --sign - "$game"
 codesign --force --sign - "$app"
 codesign --verify --strict "$app"
 echo "Built $root/$app ($(du -sh "$app" | cut -f1); macOS $minos or later; Rosetta 2 for the game)"

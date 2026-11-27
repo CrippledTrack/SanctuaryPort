@@ -106,6 +106,22 @@ was built for (27.2 with the current build, not yet scripted); it is signed ad h
 copy needs `xattr -dr com.apple.quarantine SanctuaryPort.app`; Rosetta 2 must be installed
 (`run.sh` says how when it is missing).
 
+### Game Mode
+
+macOS turns Game Mode on (top CPU and GPU priority, fewer background tasks, doubled Bluetooth
+polling for controllers) for an app it knows is a game when its window is fullscreen; the game's
+borderless fullscreen counts. The game process used to be a bare executable that RunningBoard
+listed as `anon<sanctuary-probe>`, which `gamepolicyd` skips. `app.sh` now puts it in a bundle of
+its own, `Contents/Resources/port/bin/SanctuaryPort Game.app` (`Info.plist`: identifier
+`io.github.cadugimenes.sanctuaryport.game`, category `public.app-category.role-playing-games`,
+`LSSupportsGameMode`, the app's icon), and `bin/sanctuary-probe` links to its executable.
+
+Started through that link, LaunchServices finds the bundle but gives the process no bundle ID and
+Game Mode stays off; started by the executable's real path it gets the ID, so `run.py` resolves the
+probe's path on macOS. Checked with the Metal HUD (it shows the Game Mode state): on in fullscreen
+(2026-11-27). Runs from a source checkout (`out/macos/sanctuary-probe`) have no bundle and no Game
+Mode.
+
 ## Memory footprint
 
 Measured with `footprint -p` and `vmmap -v` on the running process, after ~2 minutes (intro and

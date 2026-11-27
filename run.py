@@ -277,6 +277,11 @@ def main():
     probe = Path(env['SANCTUARY_PROBE']) if env.get('SANCTUARY_PROBE') else find_executable('sanctuary-probe' + EXE_SUFFIX)
     if not probe or not probe.is_file():
         fail(f'sanctuary-probe{EXE_SUFFIX} not found: build it with build.sh or use a packaged build.')
+    # macOS: in SanctuaryPort.app bin/sanctuary-probe links into the game's own bundle
+    # (packaging/macos/app.sh). Started through the link, macOS sees the bundle but gives the
+    # process no bundle identity, so Game Mode never applies; started by its real path it does.
+    if MACOS:
+        probe = probe.resolve()
     # Development builds run from the MSYS2 tree: its CLANG64 DLLs (SDL3, FFmpeg, ...).
     if WINDOWS and not (probe.parent / 'SDL3.dll').is_file():
         clang64 = Path(env.get('MSYS2_ROOT', r'C:\msys64')) / 'clang64' / 'bin'
