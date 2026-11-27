@@ -38,7 +38,7 @@ asm(".section .rdata,\"dr\"\n"
     ".global sanctuary_font_ttf_end\n"
     "sanctuary_font_ttf_end:\n"
     ".text\n");
-#elif defined(SANCTUARY_MACOS)
+#elif defined(__APPLE__)
 // Mach-O: C symbols carry a leading underscore; read-only data goes to __TEXT,__const.
 asm(".section __TEXT,__const\n"
     ".p2align 4\n"

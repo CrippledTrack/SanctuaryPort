@@ -30,7 +30,7 @@ std::string_view BufferTypeName(MemoryType type) {
         return "DeviceLocal";
     case MemoryType::Sparse:
         return "Sparse";
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
     case MemoryType::DenseArena:
         return "DenseArena";
 #endif
@@ -120,7 +120,7 @@ void UniqueBuffer::Destroy() {
 void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
                           VmaAllocationInfo* out_alloc_info) {
     const bool with_bda = bool(buffer_ci.usage & vk::BufferUsageFlagBits::eShaderDeviceAddress);
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
     if (mem_type == MemoryType::DenseArena) {
         // No memory yet; BufferCache allocates it and calls BindDenseArenaMemory, which also
         // reads the device address (not allowed before memory is bound).
@@ -190,7 +190,7 @@ Buffer::Buffer(const Vulkan::Instance& instance, VAddr cpu_addr_, u64 size_bytes
         Vulkan::SetObjectName(device, Handle(), "Buffer {:#x}:{:#x}", cpu_addr, size_bytes);
     }
 
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
     const bool unbacked = mem_type == MemoryType::Sparse || mem_type == MemoryType::DenseArena;
 #else
     const bool unbacked = mem_type == MemoryType::Sparse;
@@ -206,7 +206,7 @@ Buffer::Buffer(const Vulkan::Instance& instance, VAddr cpu_addr_, u64 size_bytes
     }
 }
 
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
 void Buffer::BindDenseArenaMemory(vk::Device device, vk::DeviceMemory memory) {
     ASSERT(mem_type == MemoryType::DenseArena);
     device.bindBufferMemory(buffer.buffer, memory, 0);

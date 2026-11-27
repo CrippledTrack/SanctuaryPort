@@ -6,7 +6,7 @@
 #define SANCTUARY_HOST_UCONTEXT_H
 #ifndef _WIN32
 #include <stdint.h>
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
 #include <sys/ucontext.h>
 typedef uint64_t greg_t;
 enum {

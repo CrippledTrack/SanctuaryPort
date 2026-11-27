@@ -28,7 +28,7 @@ One thing already fits Apple silicon: the runtime's guest page size is 16 KiB (`
 
 Build the POSIX (Linux) path for macOS as an x86_64 app. Rosetta still translates everything, so
 this does **not** reach arm64. It does remove Wine:
-- `MACOS-TEMP` becomes `#ifdef SANCTUARY_MACOS` (done: CMake defines it for macOS builds).
+- `MACOS-TEMP` becomes `#ifdef SANCTUARY_MACOS` (done; since 2026-11-27 plain `__APPLE__`).
 - The TCB slot becomes a real pthread key, since macOS x86_64 keeps per-thread data at `gs:8*key`.
 - Mach/BSD memory calls replace the Linux ones.
 
@@ -86,7 +86,7 @@ not help macOS.
 1. **Measure the native run.** Check frame rate, CPU time per thread and rendering correctness
    (`docs/macos.md`). This is the bar for everything else. (CrossOver is no longer supported.)
 2. **A, native macOS x86_64**, as the macOS deliverable (done: it runs). `MACOS-TEMP` is now
-   `SANCTUARY_MACOS` code, and Wine (and the TLS-slot borrowing) is gone. It is mostly the Linux POSIX path.
+   `__APPLE__` code (formerly `SANCTUARY_MACOS`), and Wine (and the TLS-slot borrowing) is gone. It is mostly the Linux POSIX path.
 3. **Spike B vs C** for arm64, each with a measurable target, before committing to either:
    - **C spike:** lift a small set of hot, self-contained game functions, chosen from a profile.
      Run the lifted arm64 versions against the native x86 ones under Rosetta on the same inputs,

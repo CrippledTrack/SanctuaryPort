@@ -67,7 +67,7 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, height_);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_RESIZABLE_BOOLEAN, true);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_MAXIMIZED_BOOLEAN, too_large && !background);
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
     // macOS: a Metal window; the renderer makes its Vulkan surface from the window's CAMetalLayer
     // (VK_EXT_metal_surface, vk_platform.cpp). SDL then never looks for a Vulkan library itself.
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_METAL_BOOLEAN, true);
@@ -94,7 +94,7 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
         window_info.render_surface = SDL_GetPointerProperty(wp, SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
     } else
 #endif
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
     if (driver && !std::strcmp(driver, "cocoa")) {
         window_info.type = WindowSystemType::Metal;
         metal_view = SDL_Metal_CreateView(window);

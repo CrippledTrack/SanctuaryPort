@@ -65,7 +65,7 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
            (u64{2} << arena_page_bits) > instance.GetMaxBufferSize()) {
         --arena_page_bits;
     }
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
     // macOS: a dense arena's memory is all committed once the GPU uses it (KosmicKrisp on
     // Apple silicon), so dense arenas use small pages (DEFAULT_DENSE_ARENA_PAGE_BITS) instead of
     // 2 GiB ones. Requests spanning pages merge arenas (MergeDenseArenas).
@@ -494,7 +494,7 @@ void BufferCache::SynchronizeDmaBuffers() {
 const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     const u64 first_page = first_block >> blocks_per_arena_page_shift;
     const u64 last_page = last_block >> blocks_per_arena_page_shift;
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
     if (instance.UsesDenseArenas() && first_page != last_page &&
         (!address_space[first_page] || address_space[first_page] != address_space[last_page])) {
         // Dense pages are small; a request may span any number of them.
@@ -510,7 +510,7 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
         if (!first_arena) {
             const u64 base_block = Common::AlignDownPow2<u64>(first_block, blocks_per_arena_page);
             const u64 num_pages = last_page - first_page + 1;
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
             const bool dense = instance.UsesDenseArenas();
             auto* new_arena =
                 &arenas.emplace_back(instance, base_block << block_shift,
@@ -562,7 +562,7 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     return new_arena;
 }
 
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
 // macOS: a dense arena gets all its memory at once, allocated directly rather than through
 // VMA (whose budget would count it). KosmicKrisp commits a bound buffer only when touched, but
 // once the GPU uses it the whole allocation counts (vmmap: all of it dirty), hence small pages.
@@ -691,7 +691,7 @@ const Buffer* BufferCache::MergeDenseArenas(u64 first_page, u64 last_page) {
 }
 #endif
 
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
 // A merge copies the old arenas' contents and points their pages at the merged arena, but a
 // descriptor written earlier in the same draw still names the old arena (sparse merges alias the
 // same memory; dense ones cannot). Reads through it see the copied data; writes would be lost, so

@@ -47,7 +47,7 @@ static uint64_t pool_size_bytes(void) {
  * so there the user range starts at 0x7000000000; Windows and Linux keep USER_MIN.
  * docs/macos.md has the details. */
 #define MACOS_USER_MIN UINT64_C(0x7000000000)
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
 static uintptr_t user_min=MACOS_USER_MIN; /* first guest address handed out from the user range */
 #else
 static uintptr_t user_min=USER_MIN; /* first guest address handed out from the user range */
@@ -274,7 +274,7 @@ static int pool(void) {
 /* Direct memory occupies [0,POOL_SIZE) of the memfd, flexible memory [POOL_SIZE,+FLEX_SPAN). */
 static int pool(void) {
     if (pool_fd>=0) return 0;
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
     /* macOS has no memfd: an unlinked POSIX shared memory object (sized once; ftruncate on it
      * works a single time). */
     char name[64];
@@ -290,7 +290,7 @@ static int pool(void) {
     backing_base=view;
     return 0;
 }
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
 /* Like Windows: macOS places host allocations anywhere, so the guest ranges are reserved before
  * anything else can land there, and unmapping inside them puts a reservation back. */
 static int reserve_fixed(uintptr_t address, uint64_t size) {
@@ -784,7 +784,7 @@ void *runtime_low_map(size_t size, int prot) {
     }
     write_unlock();
     return p;
-#elif defined(SANCTUARY_MACOS)
+#elif defined(__APPLE__)
     /* The low area is reserved (runtime_memory_reserve): blocks replace the reservation, below the
      * macOS guard; the gaps stay reserved and still catch overruns. */
     void *p=NULL;

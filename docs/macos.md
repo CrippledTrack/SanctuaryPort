@@ -19,10 +19,10 @@ SANCTUARY_GAME_DIR=~/d3/CUSA00242-app SANCTUARY_PATCH_DIR=~/d3/CUSA00242-patch \
 Needs Homebrew `cmake ninja pkg-config glslang boost robin-map vulkan-headers` and the x86_64
 KosmicKrisp build (see "KosmicKrisp built for x86_64 from source"; not yet scripted).
 
-What macOS needs, in one place. All of it is compile-time `#ifdef SANCTUARY_MACOS`, which
-`gpu/CMakeLists.txt` defines for every target of a macOS build (a build without it stops with an
-`#error`). Windows and Linux builds contain none of it, and there is no run-time macOS check.
-Upstream shadPS4 platform code keeps `__APPLE__`.
+What macOS needs, in one place. All of it is compile-time `#ifdef __APPLE__`, the compiler's own
+macro, as Windows code uses `_WIN32` (until 2026-11-27 the port used its own `SANCTUARY_MACOS`, defined
+by `gpu/CMakeLists.txt`). Windows and Linux builds contain none of it, and there is no run-time macOS
+check.
 
 | Need | How |
 |---|---|
@@ -172,7 +172,7 @@ Menu footprint with the same save data: ~5.5–5.9 GB before these two changes, 
 ## Baseline: Windows release under CrossOver (2026-11-24)
 
 History from here on. Of the `MACOS-TEMP` patches below, the user-range move and dense arenas live on
-as `#ifdef SANCTUARY_MACOS` code in the native build; the Wine host check (`runtime_wine_on_macos`) and the
+as `#ifdef SANCTUARY_MACOS` code in the native build (now `__APPLE__`); the Wine host check (`runtime_wine_on_macos`) and the
 TEB slot 63 borrow were removed with CrossOver support, so the Windows build no longer runs there.
 
 | | |
@@ -490,7 +490,7 @@ spanning request would behave.
 ### Direction
 
 (Written during the CrossOver work; since done.) The native macOS x86_64 build under Rosetta
-replaced CrossOver: `MACOS-TEMP` became `#ifdef SANCTUARY_MACOS`, and the TCB slot comes from a
+replaced CrossOver: `MACOS-TEMP` became `#ifdef SANCTUARY_MACOS` (now `__APPLE__`), and the TCB slot comes from a
 pthread key, since macOS keeps per-thread data at `gs:8*key`. Native arm64 is a separate, larger project. The guest x86-64 code would need an
 x86-64 → arm64 translator inside an arm64 process, because Rosetta only translates whole
 processes. It is still the long-term target if Rosetta's general availability ends after macOS 27,

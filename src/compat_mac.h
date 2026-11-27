@@ -3,7 +3,7 @@
  * project's own sources. The macOS build is x86_64 and runs under Rosetta 2 (docs/macos.md). */
 #ifndef SANCTUARY_COMPAT_MAC_H
 #define SANCTUARY_COMPAT_MAC_H
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
 #include <errno.h>
 #include <pthread.h>
 #include <stddef.h>

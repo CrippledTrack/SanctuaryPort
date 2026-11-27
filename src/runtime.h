@@ -1,11 +1,8 @@
 #ifndef SANCTUARY_RUNTIME_H
 #define SANCTUARY_RUNTIME_H
-#if defined(__APPLE__) && !defined(SANCTUARY_MACOS)
-#error "macOS builds define SANCTUARY_MACOS (gpu/CMakeLists.txt); build through packaging/macos/build.sh"
-#endif
 #include <stdint.h>
 #include <stddef.h>
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
 #include "compat_mac.h"
 #endif
 #ifdef _WIN32

@@ -10,11 +10,6 @@ if (NOT CMAKE_BUILD_TYPE)
 endif()
 # Frame pointers keep the loader's thread dumps (watchdog, SIGUSR2 sampling) walkable.
 add_compile_options(-fno-omit-frame-pointer)
-# sanctuary: SANCTUARY_MACOS marks the port's macOS code (docs/macos.md): on for every target of a
-# macOS build, never defined on Windows or Linux. Upstream shadPS4 platform code keeps __APPLE__.
-if (APPLE)
-    add_compile_definitions(SANCTUARY_MACOS=1)
-endif()
 
 # sanctuary: link-time optimization (SANCTUARY_LTO, default on) and profile-guided optimization
 # (SANCTUARY_PGO: off, generate = instrumented build writing into SANCTUARY_PGO_DIR, use = build with that

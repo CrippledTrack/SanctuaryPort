@@ -1,7 +1,7 @@
 // sanctuary (macOS): Linux calls the GPU library uses, force-included on macOS like
 // sanctuary_win_compat.h on Windows. The macOS build is x86_64 under Rosetta 2 (docs/macos.md).
 #pragma once
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
 #include <pthread.h>
 #include <stdint.h>
 #include <sys/resource.h>

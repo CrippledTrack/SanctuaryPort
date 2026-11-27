@@ -17,7 +17,7 @@
 #include <unistd.h>
 #ifdef _WIN32
 #include <windows.h>
-#elif defined(SANCTUARY_MACOS)
+#elif defined(__APPLE__)
 #include <sys/mman.h>
 #else
 #include <sys/syscall.h>
@@ -84,7 +84,7 @@ static void set_gs(void *base) {
     if (!TlsSetValue(tls_slot,base)) { fprintf(stderr,"STOP: TlsSetValue failed (%lu)\n",GetLastError()); exit(21); }
 }
 #define tls_block_alloc(size) _aligned_malloc(size,64)
-#elif defined(SANCTUARY_MACOS)
+#elif defined(__APPLE__)
 /* macOS x86_64 points gs at the thread's pthread data (TSD), where key k sits at gs:[8*k], and
  * no process may move gs. The guest TCB lives in a pthread key, and the loader rewrites the
  * guest's `mov rax, gs:[0]` to that slot (patch_tcb_loads), as on Windows. */
@@ -285,7 +285,7 @@ static ABI int32_t attr_set_guard(ThreadAttr **slot,uint64_t size) {
 static void set_host_name(const char *name) {
     char host[16]={0};
     memcpy(host,name,strnlen(name,sizeof(host)-1));
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
     pthread_setname_np(host); /* macOS names only the calling thread */
 #else
     pthread_setname_np(pthread_self(),host);

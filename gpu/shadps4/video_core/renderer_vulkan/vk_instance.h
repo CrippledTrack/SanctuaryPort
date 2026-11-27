@@ -3,10 +3,6 @@
 
 #pragma once
 
-#if defined(__APPLE__) && !defined(SANCTUARY_MACOS)
-#error "macOS builds define SANCTUARY_MACOS (gpu/CMakeLists.txt); build through packaging/macos/build.sh"
-#endif
-
 #include <span>
 #include <unordered_map>
 
@@ -103,7 +99,7 @@ public:
     }
 
     /// macOS: the driver has no sparse binding; buffer arenas are dense. Never elsewhere.
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
     bool UsesDenseArenas() const {
         return dense_arenas;
     }
@@ -585,7 +581,7 @@ private:
     vk::Queue present_queue;
     vk::Queue graphics_queue;
     vk::Queue sparse_queue;
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
     bool dense_arenas{}; // see UsesDenseArenas
 #endif
     std::vector<vk::PhysicalDevice> physical_devices;

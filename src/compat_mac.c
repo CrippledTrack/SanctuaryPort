@@ -1,5 +1,5 @@
 /* macOS counterparts of Linux calls (compat_mac.h). */
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
 #include <errno.h>
 #include <mach/mach.h>
 #include <pthread.h>

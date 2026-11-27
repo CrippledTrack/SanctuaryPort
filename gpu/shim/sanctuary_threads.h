@@ -12,7 +12,7 @@
 #include <windows.h>
 #else
 #include <sched.h>
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
 #include <pthread.h>
 #include <pthread/qos.h>
 #endif
@@ -35,7 +35,7 @@ inline unsigned Available() {
 inline void MakeBackground() {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_IDLE);
 }
-#elif defined(SANCTUARY_MACOS)
+#elif defined(__APPLE__)
 
 /// Hardware threads available to the process (macOS has no affinity masks).
 inline unsigned Available() {

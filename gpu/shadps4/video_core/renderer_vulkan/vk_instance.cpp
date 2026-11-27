@@ -508,7 +508,7 @@ bool Instance::CreateDevice() {
             });
         if (sparse_family != family_properties.end()) {
             sparse_queue_family_index = static_cast<u32>(sparse_family - family_properties.begin());
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
         } else if (!features.sparseResidencyBuffer) {
             // macOS: no Vulkan driver on Metal (MoltenVK, KosmicKrisp) has sparse binding.
             // The buffer cache then backs each arena with ordinary memory (dense arenas, see

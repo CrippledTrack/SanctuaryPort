@@ -45,7 +45,7 @@ static const char *host_error_text(int e) { static __thread char t[16]; snprintf
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
 #include <poll.h> /* epolls are emulated with poll(), as on Windows */
 #else
 #include <sys/epoll.h>
@@ -611,7 +611,7 @@ static ABI int32_t net_getsockopt(int32_t s, int32_t level, int32_t name, void *
 
 /* ---- Epoll: {u32 events, u32 reserved, u64 ident, u64 data}; IN 1, OUT 2, ERR 8, HUP 0x10 ---- */
 typedef struct { uint32_t events, reserved; uint64_t ident, data; } GuestEpollEvent;
-#if defined(_WIN32) || defined(SANCTUARY_MACOS)
+#if defined(_WIN32) || defined(__APPLE__)
 /* Windows and macOS (no epoll): an epoll is the list of its sockets, waited on with WSAPoll or
  * poll(). Ids start at 0x4000. */
 #ifdef _WIN32

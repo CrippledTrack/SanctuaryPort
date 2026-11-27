@@ -42,7 +42,7 @@ class BufferCache {
     // Windows driver: 2 GiB); an arena spans up to two pages, so they shrink to half the limit.
     static constexpr u64 MAX_ARENA_PAGE_BITS = 32;
     static constexpr u64 MIN_ARENA_PAGE_BITS = 30;
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
     // macOS: dense arenas use 4 MiB pages by default (SANCTUARY_DENSE_ARENA_MB picks 4 MiB or more).
     // Menus with a hero loaded: 16 MiB pages allocated 800 MiB for 442 resident, 8 MiB 648 for 478,
     // 4 MiB 540 for 440 (29 merges instead of 17).
@@ -55,7 +55,7 @@ class BufferCache {
     static constexpr u64 MIN_BLOCK_SIZE = 16_KB;
 
 public:
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
     // macOS: the guard [0x0fc0000000, 0x7000000000) is in every process and the PS4
     // user range starts above it (src/runtime_memory.c). Indexed from 0, the BDA page table spent
     // 225+ MiB on it; its entries are left out (BdaIndex).
@@ -95,14 +95,14 @@ public:
     }
     /// sanctuary: device memory bound to buffer arenas (dense arenas on macOS; 0 elsewhere).
     [[nodiscard]] u64 ArenaAllocatedBytes() const noexcept {
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
         return dense_arena_bytes;
 #else
         return 0;
 #endif
     }
 
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
     /// macOS: a draw's written binding whose dense arena was merged away while the draw bound
     /// its other buffers wrote to the retired arena; copies that range into the current one.
     void ResolveRetiredArenaWrite(const Buffer* buffer, u64 offset, u64 size);
@@ -176,7 +176,7 @@ private:
 
     void EnsureResident(const Buffer* arena, u64 first_block, u64 last_block);
 
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
     /// macOS: allocates and binds all of a dense arena's memory (no sparse binding).
     void BindDenseArena(Buffer* arena);
 
@@ -258,7 +258,7 @@ private:
     IntervalList<Backing> resident_ranges;
 
     u64 resident_bytes{};
-#ifdef SANCTUARY_MACOS
+#ifdef __APPLE__
     u64 dense_arena_bytes{}; // memory bound to dense arenas
     std::vector<std::pair<const Buffer*, vk::DeviceMemory>> dense_arena_memory;
 #endif
