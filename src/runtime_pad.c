@@ -929,7 +929,14 @@ static const RuntimeExport exports[]={
     {"scePadSetMotionSensorState",pad_ok_handle_flag},
 };
 uintptr_t runtime_pad_resolve(const char *name) { return RUNTIME_LOOKUP(exports,name); }
-void runtime_pad_report(void) { printf("Runtime: pad reads=%zu, gamepad=%s\n",reads,gamepad ? SDL_GetGamepadName(gamepad) : "none"); }
+void runtime_pad_report(void) {
+    /* The pads SDL sees as well: gamepad=none with pads seen means one is waiting for a button
+     * press (a seat waiting for its profile), not that none arrived. */
+    int seen=0;
+    SDL_JoystickID *ids=SDL_WasInit(SDL_INIT_GAMEPAD) ? SDL_GetGamepads(&seen) : NULL;
+    SDL_free(ids);
+    printf("Runtime: pad reads=%zu, gamepad=%s, pads seen=%d\n",reads,gamepad ? SDL_GetGamepadName(gamepad) : "none",seen);
+}
 
 /* probe --gamepad: runs before any game state exists, so it uses its own SDL gamepad and leaves
  * the lock and statics above alone. run.py parses this line; keep the format. */

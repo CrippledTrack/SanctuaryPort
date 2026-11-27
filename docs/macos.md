@@ -52,13 +52,44 @@ Result (native run 4): window, swapchain and presenter, guest threads, a 2 GiB d
 ~210% CPU and a ~5.2 GB physical footprint on this 8 GB Mac, now ~2.9 GB (see "Memory footprint").
 
 Not done yet:
-- frame rate, rendering correctness, audio, gamepads and a long session;
+- frame rate, rendering correctness, audio and a long session (gamepads: see "Gamepads");
 - the in-world footprint (~7 GB, see "Memory footprint");
 - scripting and packaging the KosmicKrisp build and a `.app`;
-- `build.sh --test`'s unit tests on macOS;
-- `--gamepad` mode, which pumps SDL events off the main thread.
+- `build.sh --test`'s unit tests on macOS.
 
 Linux and native Windows have not been rebuilt since these changes.
+
+## Gamepads
+
+Tested with an Xbox Elite Series 2 (2026-11-27): the game and the launcher read it (moving,
+attacking, menus; the launcher's live view, tab switching and Game > Players).
+
+**Known issue: rumble does not work.** SDL accepts every rumble request (the game logs
+`vibration … -> sent`, the launcher's motor test reports success), but the controller does not
+vibrate, on either route, tested over USB:
+- Apple's route (default): SDL drives GameController.framework haptics (CoreHaptics); the engine
+  starts and the request succeeds, nothing is felt.
+- `SDL_JOYSTICK_MFI=0` (SDL's own Xbox driver): SDL's source notes that macOS does not let it
+  write output reports (rumble) to wired Xbox controllers; it reports success anyway.
+Not yet tried over Bluetooth, where SDL's own driver can send rumble reports.
+
+- **The window loop runs on a main run-loop timer** (`gpu/shim/sanctuarygpu.cpp`). It used to be one
+  block on the GCD main queue that never returned, so nothing else queued to the main queue ever
+  ran. On macOS SDL hands every controller Apple's GameController framework supports to its MFi
+  backend (`SDL_iokitjoystick.c` asks `IOS_SupportedHIDDevice`), and that framework announces
+  controllers through the main queue: the game never saw a pad (`gamepad=none`). The `--gamepad`
+  probe did, as it pumps on another thread while the main thread idles in `CFRunLoopRun`.
+- **`SDL_JOYSTICK_MFI=0`** makes SDL skip GameController.framework and drive the pad with its own
+  HID drivers (as on Linux and Windows); it worked even before the fix and names the Elite 2 as
+  "Xbox One Elite 2 Controller" instead of "Xbox One Wireless Controller".
+- The log shows `Input: gamepad added: <name> (<type>)` and removals; the runtime report adds
+  `pads seen=<n>` (a pad waiting for a button press shows `gamepad=none, pads seen=1`).
+- **Launcher**: it is arm64 and cannot load the game's x86_64 SDL3, so `deps.sh` also builds SDL3
+  for arm64 (`out/macos-launcher-deps`) and `app.sh` puts it in `Contents/Frameworks`; the launcher
+  looks there, then in Homebrew's `/opt/homebrew/lib`. SDL3 names the platform `macOS` in mapping
+  lines (SDL2 said `Mac OS X`; both are accepted).
+- Not done: motion sensors and the light bar (no-ops on every platform); the Elite's back paddles
+  are not mapped.
 
 ## SanctuaryPort.app (experimental)
 

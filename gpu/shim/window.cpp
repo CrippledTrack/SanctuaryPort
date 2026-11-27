@@ -195,6 +195,15 @@ bool WindowSDL::PollEvents() {
     }
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
+        // sanctuary: controller arrivals in the log (the runtime opens pads when it reads them).
+        if (event.type == SDL_EVENT_GAMEPAD_ADDED || event.type == SDL_EVENT_GAMEPAD_REMOVED) {
+            const SDL_JoystickID id = event.gdevice.which;
+            const char* name = SDL_GetGamepadNameForID(id);
+            const char* type = SDL_GetGamepadStringForType(SDL_GetGamepadTypeForID(id));
+            std::printf("Input: gamepad %s: %s (%s)\n",
+                        event.type == SDL_EVENT_GAMEPAD_ADDED ? "added" : "removed",
+                        name ? name : "unknown", type ? type : "unknown");
+        }
         if (text_active && (event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_KEY_DOWN)) {
             std::scoped_lock lock{text_mutex};
             if (event.type == SDL_EVENT_TEXT_INPUT) {

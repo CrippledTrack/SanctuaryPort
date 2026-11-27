@@ -39,8 +39,9 @@ pub static STEPS: &[(&str, &str)] = &[
 pub static STICK_AXES: &[&str] = &["leftx", "lefty", "rightx", "righty"];
 pub static TRIGGERS: &[&str] = &["lefttrigger", "righttrigger"];
 
-/// The platforms SDL names in a mapping line.
-const PLATFORMS: [&str; 3] = ["Windows", "Linux", "Mac OS X"];
+/// The platforms SDL names in a mapping line: SDL3 says "macOS" (`SDL_GetPlatform`); SDL2's
+/// "Mac OS X" is still accepted for older lines, as SDL3 itself does.
+const PLATFORMS: [&str; 4] = ["Windows", "Linux", "macOS", "Mac OS X"];
 const CROSS_FIRST: &str = "Map Cross / A before saving.";
 const INVALID_BINDING: &str = "Invalid controller binding.";
 

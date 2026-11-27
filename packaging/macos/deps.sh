@@ -63,6 +63,21 @@ if ! done_stamp sdl3; then
     cmake_build sdl3 "$src/SDL3-3.4.20" -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST_LIBRARY=OFF \
         -DSDL_EXAMPLES=OFF
 fi
+# The launcher is native arm64 and loads SDL3 itself (controller mapper, live view, Game >
+# Players): the same SDL3 built for arm64, in its own prefix so the x86_64 build never sees it.
+# packaging/macos/app.sh puts it in the app's Contents/Frameworks.
+launcher_prefix=$PWD/out/macos-launcher-deps
+if [[ ! -f $launcher_prefix/.done-sdl3 ]]; then
+    fetch https://github.com/libsdl-org/SDL/releases/download/release-3.4.20/SDL3-3.4.20.tar.gz SDL3-3.4.20.tar.gz
+    [[ -d $src/SDL3-3.4.20 ]] || tar -xzf "$src/SDL3-3.4.20.tar.gz" -C "$src"
+    rm -rf "$src/build-sdl3-arm64"
+    cmake -S "$src/SDL3-3.4.20" -B "$src/build-sdl3-arm64" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_INSTALL_PREFIX="$launcher_prefix" \
+        -DCMAKE_INSTALL_NAME_DIR=@rpath -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST_LIBRARY=OFF \
+        -DSDL_EXAMPLES=OFF > "$src/sdl3-arm64.log" 2>&1
+    ninja -C "$src/build-sdl3-arm64" install >> "$src/sdl3-arm64.log" 2>&1 || { tail -30 "$src/sdl3-arm64.log"; exit 1; }
+    touch "$launcher_prefix/.done-sdl3"; echo "built sdl3 (arm64, launcher)"
+fi
 if ! done_stamp vulkan-loader; then
     fetch https://github.com/KhronosGroup/Vulkan-Loader/archive/refs/tags/v1.4.363.tar.gz vulkan-loader-1.4.363.tar.gz
     rm -rf "$src/Vulkan-Loader-1.4.363" && tar -xzf "$src/vulkan-loader-1.4.363.tar.gz" -C "$src"

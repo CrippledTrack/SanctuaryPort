@@ -6,6 +6,8 @@
 #   Contents/MacOS/SanctuaryPort          the entry point (this script's ENTRY below): sets the
 #                                         folders, then starts the launcher
 #   Contents/MacOS/sanctuaryport-launcher the launcher (arm64)
+#   Contents/Frameworks/libSDL3.0.dylib   the launcher's own SDL3 (arm64; controller mapper, live
+#                                         view): out/macos-launcher-deps from deps.sh
 #   Contents/Resources/port/              the port folder (SANCTUARY_PORT_DIR): run.sh, run.py,
 #                                         scripts, patches, launcher, assets,
 #       bin/                              sanctuary-probe, sanctuary-gpu-capabilities (x86_64)
@@ -28,6 +30,8 @@ export PATH=/opt/homebrew/bin:$PATH
 [[ $(uname -m) == arm64 ]] || { echo 'Build the app on an Apple silicon Mac.' >&2; exit 1; }
 [[ -x out/macos/sanctuary-probe && -x out/macos/sanctuary-gpu-capabilities ]] ||
     { echo 'Build the runtime first: bash packaging/macos/build.sh' >&2; exit 1; }
+launcher_sdl=out/macos-launcher-deps/lib/libSDL3.0.dylib
+[[ -f $launcher_sdl ]] || { echo 'No arm64 SDL3 for the launcher: run bash packaging/macos/deps.sh' >&2; exit 1; }
 deps=out/macos-deps/lib
 kk=${SANCTUARY_KOSMICKRISP_DIR:-out/macos/kosmickrisp}
 [[ -f $kk/libvulkan_kosmickrisp.dylib ]] ||
@@ -122,8 +126,11 @@ tar -xzf "$cache/python-$PYTHON_VERSION-$PYTHON_BUILD-arm64.tar.gz" -C "$port" #
 "$port/python/bin/python3" -c 'import PIL'
 find "$port/python" -name __pycache__ -type d -prune -exec rm -rf {} +
 
-# The launcher and its entry point.
+# The launcher and its entry point, and the launcher's arm64 SDL3 (it looks in ../Frameworks).
 cp "$launcher" "$contents/MacOS/sanctuaryport-launcher"
+mkdir -p "$contents/Frameworks"
+cp -L "$launcher_sdl" "$contents/Frameworks/libSDL3.0.dylib"
+chmod u+w "$contents/Frameworks/libSDL3.0.dylib"
 cat > "$contents/MacOS/SanctuaryPort" <<'ENTRY'
 #!/bin/bash
 # SanctuaryPort.app's entry point (packaging/macos/app.sh): the port folder inside the app, the
@@ -152,7 +159,7 @@ done
 iconutil -c icns "$iconset" -o "$contents/Resources/SanctuaryPort.icns"
 
 # The oldest macOS every binary inside loads on (the driver is usually the newest).
-minos=$(for f in "$contents/MacOS/sanctuaryport-launcher" "$port"/bin/sanctuary-* "$port"/bin/kosmickrisp/*.dylib "$port"/lib/*.dylib; do
+minos=$(for f in "$contents/MacOS/sanctuaryport-launcher" "$contents/Frameworks"/*.dylib "$port"/bin/sanctuary-* "$port"/bin/kosmickrisp/*.dylib "$port"/lib/*.dylib; do
     vtool -show-build "$f" 2>/dev/null | awk '$1 == "minos" {print $2}'
 done | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
 cat > "$contents/Info.plist" <<EOF
@@ -179,7 +186,7 @@ EOF
 # Ad-hoc signatures, inside out: every Mach-O file, then the app.
 while IFS= read -r -d '' f; do
     if file -b "$f" | grep -q Mach-O; then codesign --force --sign - "$f" 2>/dev/null; fi
-done < <(find "$contents/Resources" "$contents/MacOS" -type f -print0)
+done < <(find "$contents/Resources" "$contents/Frameworks" "$contents/MacOS" -type f -print0)
 codesign --force --sign - "$app"
 codesign --verify --strict "$app"
 echo "Built $root/$app ($(du -sh "$app" | cut -f1); macOS $minos or later; Rosetta 2 for the game)"

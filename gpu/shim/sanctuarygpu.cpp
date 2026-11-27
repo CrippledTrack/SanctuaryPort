@@ -1,4 +1,5 @@
 #ifdef SANCTUARY_MACOS
+#include <CoreFoundation/CoreFoundation.h>
 #include <dispatch/dispatch.h>
 #endif
 #include <functional>
@@ -237,7 +238,7 @@ extern "C" int sanctuarygpu_init(const SanctuaryGpuConfig* config) {
     Core::Emulator::FillElfInfo(*config);
     const std::string title = config->title ? config->title : "SanctuaryPort";
     const s32 width = config->width, height = config->height;
-    auto window_loop = [title, width, height] {
+    auto create_window = [title, width, height] {
         Common::SetCurrentThreadName("sanctuary:window");
         auto* window = new Frontend::WindowSDL(width, height, title.c_str());
         {
@@ -246,20 +247,44 @@ extern "C" int sanctuarygpu_init(const SanctuaryGpuConfig* config) {
             g_window_ready = true;
         }
         g_window_cv.notify_all();
-        while (window->PollEvents()) {
-            SDL_Delay(2);
-        }
+        return window;
+    };
+    static constexpr auto window_closed = [] {
         LOG_INFO(Frontend, "Window closed by user");
         runtime_report();
         std::fflush(stdout);
         std::_Exit(0);
     };
 #ifdef SANCTUARY_MACOS
-    // macOS: AppKit windows live on the main thread, whose run loop drains the GCD main queue
-    // (src/probe.c main); the loop then never gives the queue back.
-    dispatch_async_f(dispatch_get_main_queue(), new std::function<void()>(std::move(window_loop)),
-                     [](void* loop) { (*static_cast<std::function<void()>*>(loop))(); });
+    // macOS: AppKit windows live on the main thread, whose run loop (src/probe.c main) also drains
+    // the GCD main queue. The window is created there, then polled by a run-loop timer, one pass
+    // per tick, so the run loop keeps serving the main queue between passes: Apple's
+    // GameController framework announces controllers through it (SDL's MFi joystick backend; an
+    // endless loop on the main queue meant no controller ever appeared).
+    dispatch_async_f(dispatch_get_main_queue(), new std::function<Frontend::WindowSDL*()>(std::move(create_window)),
+                     [](void* create) {
+                         auto* make = static_cast<std::function<Frontend::WindowSDL*()>*>(create);
+                         Frontend::WindowSDL* window = (*make)();
+                         delete make;
+                         CFRunLoopTimerContext context{0, window, nullptr, nullptr, nullptr};
+                         CFRunLoopTimerRef timer = CFRunLoopTimerCreate(
+                             kCFAllocatorDefault, CFAbsoluteTimeGetCurrent(), 0.002, 0, 0,
+                             [](CFRunLoopTimerRef, void* info) {
+                                 if (!static_cast<Frontend::WindowSDL*>(info)->PollEvents()) {
+                                     window_closed();
+                                 }
+                             },
+                             &context);
+                         CFRunLoopAddTimer(CFRunLoopGetMain(), timer, kCFRunLoopCommonModes);
+                     });
 #else
+    auto window_loop = [create_window] {
+        Frontend::WindowSDL* window = create_window();
+        while (window->PollEvents()) {
+            SDL_Delay(2);
+        }
+        window_closed();
+    };
     g_window_thread = std::thread(std::move(window_loop));
     g_window_thread.detach();
 #endif

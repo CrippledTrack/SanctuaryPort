@@ -766,8 +766,24 @@ impl Sdl3 {
 
 /// Where SDL3 is looked for when no library is given, in order (Python `SDLJoysticks`): the
 /// port's `bin/` and `out/`, then MSYS2's (`MSYS2_ROOT`, else `C:\msys64`); on unix the system's.
+/// macOS: the app's own arm64 SDL3 (`Contents/Frameworks`, next to `Contents/MacOS`; the game's
+/// SDL3 in the port folder is x86_64 and cannot load here), then Homebrew's, then the system's.
 fn search_list(port: &Path, msys2_root: Option<OsString>) -> Vec<PathBuf> {
-    if cfg!(windows) {
+    if cfg!(target_os = "macos") {
+        let mut list = Vec::new();
+        if let Some(contents) = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().and_then(Path::parent).map(Path::to_path_buf))
+        {
+            list.push(contents.join("Frameworks").join("libSDL3.0.dylib"));
+        }
+        let _ = port;
+        list.push("/opt/homebrew/lib/libSDL3.0.dylib".into());
+        list.push("/usr/local/lib/libSDL3.0.dylib".into());
+        list.push("libSDL3.0.dylib".into());
+        list.push("libSDL3.dylib".into());
+        list
+    } else if cfg!(windows) {
         let msys2 = PathBuf::from(msys2_root.unwrap_or_else(|| r"C:\msys64".into()));
         vec![
             port.join("bin").join("SDL3.dll"),
@@ -859,6 +875,14 @@ fn load(name: &Path) -> Result<&'static Library, JoyError> {
 fn not_found(name: &Path, said: &str) -> bool {
     if name.components().count() > 1 {
         !name.exists()
+    } else if cfg!(target_os = "macos") {
+        // macOS: `dlopen(<name>, <mode>): tried: '<path>' (no such file), ...`. A copy it found
+        // but could not use (another architecture, a missing dependency, a bad signature) is
+        // reported instead.
+        said.starts_with(&format!("dlopen({},", name.display()))
+            && !said.contains("incompatible architecture")
+            && !said.contains("Library not loaded")
+            && !said.contains("code signature")
     } else {
         said.starts_with(&format!("{}:", name.display()))
     }
@@ -919,7 +943,21 @@ mod tests {
                 Path::new(r"C:\msys64\clang64\bin\SDL3.dll")
             );
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        {
+            // The app's own arm64 SDL3 first, then Homebrew's, then the loader's search.
+            assert!(search[0].ends_with("Frameworks/libSDL3.0.dylib"), "{search:?}");
+            assert_eq!(
+                search[1..],
+                [
+                    PathBuf::from("/opt/homebrew/lib/libSDL3.0.dylib"),
+                    PathBuf::from("/usr/local/lib/libSDL3.0.dylib"),
+                    PathBuf::from("libSDL3.0.dylib"),
+                    PathBuf::from("libSDL3.dylib"),
+                ]
+            );
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         assert_eq!(
             search,
             [PathBuf::from("libSDL3.so.0"), PathBuf::from("libSDL3.so")]
@@ -989,14 +1027,37 @@ mod tests {
     fn only_a_name_the_loader_did_not_find_is_missing() {
         // glibc names a bare name it did not find; a library it found is named by its path, and a
         // missing dependency by the dependency's name.
-        let name = Path::new("libSDL3.so.0");
         let missing = "cannot open shared object file: No such file or directory";
-        assert!(not_found(name, &format!("libSDL3.so.0: {missing}")));
-        assert!(!not_found(
-            name,
-            "/usr/lib/libSDL3.so.0: invalid ELF header"
-        ));
-        assert!(!not_found(name, &format!("libdecor-0.so.0: {missing}")));
+        #[cfg(not(target_os = "macos"))]
+        {
+            let name = Path::new("libSDL3.so.0");
+            assert!(not_found(name, &format!("libSDL3.so.0: {missing}")));
+            assert!(!not_found(
+                name,
+                "/usr/lib/libSDL3.so.0: invalid ELF header"
+            ));
+            assert!(!not_found(name, &format!("libdecor-0.so.0: {missing}")));
+        }
+        // macOS's dyld names the bare name and every place it tried; a copy of another
+        // architecture, or one whose dependency is missing, was found and is reported.
+        #[cfg(target_os = "macos")]
+        {
+            let name = Path::new("libSDL3.0.dylib");
+            assert!(not_found(
+                name,
+                "dlopen(libSDL3.0.dylib, 0x0005): tried: 'libSDL3.0.dylib' (no such file), \
+                 '/usr/lib/libSDL3.0.dylib' (no such file, not in dyld cache)"
+            ));
+            assert!(!not_found(
+                name,
+                "dlopen(libSDL3.0.dylib, 0x0005): tried: '/usr/local/lib/libSDL3.0.dylib' \
+                 (mach-o file, but is an incompatible architecture (have 'x86_64', need 'arm64'))"
+            ));
+            assert!(!not_found(
+                name,
+                "dlopen(libSDL3.0.dylib, 0x0005): Library not loaded: @rpath/libfoo.dylib"
+            ));
+        }
         // A path is looked at directly.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("libSDL3.so.0");
