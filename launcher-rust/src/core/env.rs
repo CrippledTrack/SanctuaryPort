@@ -115,6 +115,8 @@ pub fn environment(
         }
         put_switch(&mut env, settings, "gamemode");
         put_switch(&mut env, settings, "mangohud");
+        // Acted on by run.py on macOS only (MTL_HUD_ENABLED), as MangoHud only on Linux.
+        put_switch(&mut env, settings, "metal_hud");
     }
     // The launcher's patch selection is the whole list (derived: no 1:1 catalog row).
     let game_dir = settings.get_str("game_dir");

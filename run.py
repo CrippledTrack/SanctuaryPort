@@ -104,6 +104,9 @@ def launch_prefix(env):
         return shlex.split(env['SANCTUARY_LAUNCH_PREFIX'])
     if env.get('SANCTUARY_MANGOHUD') == '1':
         env.setdefault('MANGOHUD', '1')
+    # macOS: Apple's Metal performance HUD (FPS, frame times, GPU memory) over the game window.
+    if MACOS and env.get('SANCTUARY_METAL_HUD') == '1':
+        env.setdefault('MTL_HUD_ENABLED', '1')
     if env.get('SANCTUARY_GAMEMODE') == '1':
         if gamemode := shutil.which('gamemoderun'):
             return [gamemode]

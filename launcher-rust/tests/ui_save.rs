@@ -39,6 +39,9 @@ fn state_in(dir: &Path) -> State {
     };
     let mut state = State::new(Paths::from_env(dir, &env));
     state.splash.done = true;
+    // No test reaches the machine's own SDL3 or pads (tests/common): on macOS concurrent tests
+    // starting and stopping a real SDL on different threads trap in its IOKit backend.
+    state.joystick_opener = |_| Err(sanctuaryport_launcher::core::joysticks::JoyError::Missing);
     state
 }
 

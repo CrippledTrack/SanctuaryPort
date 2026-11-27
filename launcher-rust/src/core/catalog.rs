@@ -163,6 +163,8 @@ pub static SETTINGS: &[Setting] = &[
     app("video_backend", Pick(VIDEO_BACKENDS), Text("auto"), None),
     app("gamemode", Flag, Bool(false), env("SANCTUARY_GAMEMODE", "")),
     app("mangohud", Flag, Bool(false), env("SANCTUARY_MANGOHUD", "")),
+    // macOS: Apple's Metal performance HUD (run.py sets MTL_HUD_ENABLED).
+    app("metal_hud", Flag, Bool(false), env("SANCTUARY_METAL_HUD", "")),
     app("desktop_integration", Flag, Bool(true), None),
     app(
         "user_dir",

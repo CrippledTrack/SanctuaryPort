@@ -6,6 +6,7 @@
   "video_backend": "auto",
   "gamemode": false,
   "mangohud": false,
+  "metal_hud": false,
   "desktop_integration": true,
   "user_dir": "",
   "mods_dir": "",

@@ -19,7 +19,11 @@ fn state_in(dir: &std::path::Path) -> State {
         "APPDATA" | "USERPROFILE" | "HOME" | "XDG_CONFIG_HOME" => Some(root.clone()),
         _ => None,
     };
-    State::new(Paths::from_env(dir, &env))
+    let mut state = State::new(Paths::from_env(dir, &env));
+    // No test reaches the machine's own SDL3 or pads (tests/common): on macOS concurrent tests
+    // starting and stopping a real SDL on different threads trap in its IOKit backend.
+    state.joystick_opener = |_| Err(sanctuaryport_launcher::core::joysticks::JoyError::Missing);
+    state
 }
 
 #[test]

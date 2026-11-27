@@ -151,9 +151,28 @@ pub fn launcher_checks(state: &State, lang: &str) -> Vec<CheckRow> {
     checks
 }
 
-/// The check boxes of the Linux section; empty on Windows.
+/// The check boxes of the macOS section; empty elsewhere.
+pub fn macos_checks(state: &State, lang: &str) -> Vec<CheckRow> {
+    if !cfg!(target_os = "macos") {
+        return Vec::new();
+    }
+    vec![check_row(
+        state,
+        "metal_hud",
+        restart(lang, METAL_HUD_LABEL),
+        tr(lang, METAL_HUD_HINT),
+        true,
+    )]
+}
+
+/// The macOS section's Metal HUD switch (`MTL_HUD_ENABLED`, set by run.py).
+pub const METAL_HUD_LABEL: &str = "Metal HUD overlay";
+pub const METAL_HUD_HINT: &str =
+    "Shows Apple's Metal performance HUD (FPS, frame times, GPU memory) over the game.";
+
+/// The check boxes of the Linux section; empty on Windows and macOS.
 pub fn linux_checks(state: &State, lang: &str) -> Vec<CheckRow> {
-    if cfg!(windows) {
+    if cfg!(windows) || cfg!(target_os = "macos") {
         return Vec::new();
     }
     let tools = state.linux_tools;
@@ -259,6 +278,7 @@ pub fn check_keys(state: &State) -> Vec<&'static str> {
     let lang = state.lang.as_str();
     let mut all = launcher_checks(state, lang);
     all.extend(linux_checks(state, lang));
+    all.extend(macos_checks(state, lang));
     all.into_iter().map(|check| check.key).collect()
 }
 
@@ -325,7 +345,12 @@ pub fn view(state: &State) -> Element<'_, Message> {
     // A narrow drawer in a long language moves the last buttons to a second line.
     page = page.push(column![buttons.wrap().vertical_spacing(6)].padding([10, 0]));
 
-    if !cfg!(windows) {
+    if cfg!(target_os = "macos") {
+        page = page.push(section(state.rtl, "macOS"));
+        for check in macos_checks(state, lang) {
+            page = page.push(check_view(state.rtl, &check));
+        }
+    } else if !cfg!(windows) {
         page = page.push(section(state.rtl, &tr(lang, "Linux")));
         let linux = linux_checks(state, lang);
         if let Some(first) = linux.first() {

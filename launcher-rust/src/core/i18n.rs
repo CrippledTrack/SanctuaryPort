@@ -1036,6 +1036,14 @@ static UI_EXTRA: &[(&str, &[(&str, &str)])] = &[
         "The chime of an unlocked trophy. Also in the in-game menu (Insert): Trophies > Notifications.",
         &[("zh", "解锁奖杯时的提示音。也可在游戏内菜单（Insert）：奖杯 > 通知 中设置。"), ("pt", "O som de um troféu desbloqueado. Também no menu do jogo (Insert): Troféus > Notificações."), ("es", "El sonido de un trofeo desbloqueado. También en el menú del juego (Insert): Trofeos > Notificaciones."), ("cs", "Zvuk odemčené trofeje. Také v herním menu (Insert): Trofeje > Oznámení."), ("ru", "Звук открытого трофея. Также в игровом меню (Insert): Трофеи > Уведомления."), ("fr", "Le son d'un trophée débloqué. Aussi dans le menu en jeu (Insert) : Trophées > Notifications."), ("de", "Der Ton einer freigeschalteten Trophäe. Auch im Spielmenü (Insert): Trophäen > Benachrichtigungen."), ("it", "Il suono di un trofeo sbloccato. Anche nel menu di gioco (Insert): Trofei > Notifiche."), ("pl", "Dźwięk odblokowanego trofeum. Także w menu gry (Insert): Trofea > Powiadomienia."), ("tr", "Açılan bir kupanın sesi. Oyun içi menüde de var (Insert): Kupalar > Bildirimler."), ("id", "Suara trofi yang terbuka. Juga ada di menu dalam game (Insert): Trofi > Notifikasi.")],
     ),
+    (
+        "Metal HUD overlay",
+        &[("zh", "Metal HUD 叠加层"), ("pt", "Overlay do Metal HUD"), ("es", "Superposición de Metal HUD"), ("cs", "Překryv Metal HUD"), ("ru", "Оверлей Metal HUD"), ("fr", "Superposition Metal HUD"), ("de", "Metal-HUD-Overlay"), ("it", "Overlay Metal HUD"), ("pl", "Nakładka Metal HUD"), ("tr", "Metal HUD katmanı"), ("id", "Overlay Metal HUD")],
+    ),
+    (
+        "Shows Apple's Metal performance HUD (FPS, frame times, GPU memory) over the game.",
+        &[("zh", "在游戏上显示 Apple 的 Metal 性能 HUD（FPS、帧时间、GPU 内存）。"), ("pt", "Mostra o HUD de desempenho Metal da Apple (FPS, tempos de quadro, memória da GPU) sobre o jogo."), ("es", "Muestra el HUD de rendimiento Metal de Apple (FPS, tiempos de fotograma, memoria de la GPU) sobre el juego."), ("cs", "Zobrazí nad hrou výkonový HUD Metal od Applu (FPS, časy snímků, paměť GPU)."), ("ru", "Показывает поверх игры HUD производительности Metal от Apple (FPS, время кадра, память GPU)."), ("fr", "Affiche le HUD de performances Metal d'Apple (FPS, temps d'image, mémoire GPU) par-dessus le jeu."), ("de", "Zeigt Apples Metal-Leistungs-HUD (FPS, Frametimes, GPU-Speicher) über dem Spiel."), ("it", "Mostra l'HUD delle prestazioni Metal di Apple (FPS, tempi dei fotogrammi, memoria GPU) sopra il gioco."), ("pl", "Pokazuje nad grą nakładkę wydajności Metal od Apple (FPS, czasy klatek, pamięć GPU)."), ("tr", "Apple'ın Metal performans HUD'unu (FPS, kare süreleri, GPU belleği) oyunun üzerinde gösterir."), ("id", "Menampilkan HUD performa Metal dari Apple (FPS, waktu frame, memori GPU) di atas game.")],
+    ),
 ];
 
 fn ui_extra(lang: &str, en: &str) -> Option<&'static str> {
